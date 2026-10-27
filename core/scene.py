@@ -2,10 +2,12 @@
 @file scene.py
 @brief Clase base de todas las escenas (modos) que puede mostrar la matriz.
 """
-
 from __future__ import annotations
+
 from typing import Any
+
 from PIL import Image
+
 
 class Scene:
     """
@@ -29,6 +31,8 @@ class Scene:
     label = "Base"
 
     ## Opciones que la escena expone al usuario; la interfaz web genera los controles a partir de aquí.
+    ## Tipos soportados: "float"/"int" (con "min" y "max" opcionales) y "choice" (con "choices":
+    ## lista de {"value", "label"}).
     settings_schema: dict[str, dict[str, Any]] = {}
 
     def __init__(self) -> None:
@@ -44,8 +48,9 @@ class Scene:
         """
         @brief Actualiza ajustes de la escena.
 
-        Las claves desconocidas se ignoran y los valores se limitan al rango
-        "min"/"max" definido en settings_schema.
+        Las claves desconocidas se ignoran, los valores numéricos se limitan al rango
+        "min"/"max" definido en settings_schema y, en los ajustes de tipo "choice",
+        los valores que no estén entre las opciones válidas se descartan.
 
         @param values Pares clave=valor con los ajustes a modificar.
         """
@@ -53,6 +58,10 @@ class Scene:
             spec = self.settings_schema.get(key)
             if spec is None:
                 continue
+            if "choices" in spec:
+                valid = [c["value"] if isinstance(c, dict) else c for c in spec["choices"]]
+                if value not in valid:
+                    continue
             if "min" in spec:
                 value = max(spec["min"], value)
             if "max" in spec:

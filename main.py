@@ -22,9 +22,9 @@ except ImportError:
     def load_dotenv() -> None:
         return None
 
-from core.display import MatrixDisplay, MockDisplay
+from core.display import DEFAULT_BRIGHTNESS, MATRIX_SIZE, MatrixDisplay, MockDisplay
 from core.manager import SceneManager
-from scenes.spotify_record import SpotifyRecordScene, demo_album_art, render_record
+from scenes.spotify_record import DEFAULT_STYLE, STYLES, SpotifyRecordScene, demo_album_art, render_record
 from scenes.test_pattern import TestPatternScene
 from services.spotify import SpotifyClient, SpotifyPoller
 
@@ -44,13 +44,14 @@ def positive_float(value: str) -> float:
 
 def render_preview_frames(directory: Path) -> None:
     """
-    @brief Genera cuatro fotogramas de ejemplo del disco girando (0, 45, 90 y 135 grados).
+    @brief Genera fotogramas de ejemplo (0, 45, 90 y 135 grados) de cada diseño del disco.
     @param directory Carpeta donde se guardan los PNG (se crea si no existe).
     """
     directory.mkdir(parents=True, exist_ok=True)
     art = demo_album_art(96)
-    for index, angle in enumerate((0, 45, 90, 135)):
-        render_record(art, angle, 64).save(directory / f"album-disk-{index:02d}.png")
+    for style in STYLES:
+        for index, angle in enumerate((0, 45, 90, 135)):
+            render_record(art, angle, 64, style).save(directory / f"album-disk-{style}-{index:02d}.png")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -59,17 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
     @return Parser de argparse configurado.
     """
     parser = argparse.ArgumentParser(description="Spin Spotify album art on a 64x64 RGB matrix.")
-    parser.add_argument("--rows", type=int, default=64)
-    parser.add_argument("--cols", type=int, default=64)
-    parser.add_argument("--chain-length", type=int, default=1)
-    parser.add_argument("--parallel", type=int, default=1)
-    parser.add_argument("--brightness", type=int, default=65)
-    parser.add_argument("--gpio-slowdown", type=int, default=2)
-    parser.add_argument("--hardware-mapping", default="regular")
-    parser.add_argument("--pwm-bits", type=int, default=11)
-    parser.add_argument("--limit-refresh-rate-hz", type=int, default=120)
-    parser.add_argument("--no-hardware-pulse", action="store_true",
-                        help="Avoid Pi onboard sound conflict at the cost of more possible flicker.")
+    parser.add_argument("--brightness", type=int, default=DEFAULT_BRIGHTNESS)
+    parser.add_argument("--style", choices=list(STYLES), default=DEFAULT_STYLE,
+                        help="Diseño del disco: " + ", ".join(f"{k} ({v[0]})" for k, v in STYLES.items()))
     parser.add_argument("--poll-seconds", type=positive_float, default=2.0)
     parser.add_argument("--fps", type=positive_float, default=20.0)
     parser.add_argument("--rpm", type=positive_float, default=20.0)
@@ -85,8 +78,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--once", action="store_true", help="Render one frame and exit.")
     parser.add_argument("--no-browser", action="store_true",
                         help="Print the Spotify auth URL without trying to open a browser.")
-    parser.add_argument("--drop-privileges", action="store_true",
-                        help="Soltar root tras iniciar la matriz (impide escribir el token de Spotify).")
     return parser
 
 
@@ -154,11 +145,11 @@ def run(args: argparse.Namespace) -> None:
             return
         poller = SpotifyPoller(spotify, args.poll_seconds)
         poller.start()
-        manager.register(SpotifyRecordScene(poller, rpm=args.rpm))
+        manager.register(SpotifyRecordScene(poller, rpm=args.rpm, style=args.style))
         manager.set_scene("spotify_record")
 
-    display = MockDisplay(args.mock_output) if args.mock_output else MatrixDisplay(args)
-    size = min(args.rows, args.cols)
+    display = MockDisplay(args.mock_output) if args.mock_output else MatrixDisplay(args.brightness)
+    size = MATRIX_SIZE
     last_frame = time.monotonic()
 
     try:
