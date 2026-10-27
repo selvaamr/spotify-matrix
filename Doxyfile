@@ -1,0 +1,19 @@
+# Doxyfile mínimo para un proyecto Python. Genera la documentación con:  doxygen Doxyfile
+PROJECT_NAME           = "Spotify Matrix"
+PROJECT_BRIEF          = "Escenas y control de una matriz LED RGB desde Raspberry Pi"
+OUTPUT_DIRECTORY       = docs
+OUTPUT_LANGUAGE        = Spanish
+INPUT                  = main.py core services scenes
+FILE_PATTERNS          = *.py
+RECURSIVE              = YES
+EXCLUDE_PATTERNS       = */__pycache__/* */.venv/*
+OPTIMIZE_OUTPUT_JAVA   = YES
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+JAVADOC_AUTOBRIEF      = YES
+PYTHON_DOCSTRING       = YES
+SOURCE_BROWSER         = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HAVE_DOT               = NO
