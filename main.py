@@ -30,10 +30,13 @@ except ImportError:
 from core.controller import Controller
 from core.display import MATRIX_SIZE, MatrixDisplay, MockDisplay
 from core.manager import SceneManager
+from core.notes import NotesStore
+from core.pixelart import PixelArtStore
 from core.preview import FramePublisher
 from core.settings import SettingsStore
 from scenes.calendar_scene import CalendarScene
 from scenes.clock import ClockScene
+from scenes.pixel_art import PixelArtScene
 from scenes.spotify_record import STYLES, SpotifyRecordScene, demo_album_art, render_record
 from scenes.weather import WeatherScene
 from services.spotify import SpotifyClient, SpotifyPoller
@@ -41,6 +44,15 @@ from services.weather import poller_from_env
 
 ## Archivo donde se guardan los ajustes del usuario (junto a main.py, esté donde esté el directorio de trabajo).
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
+
+## Archivo donde se guardan las notas del calendario (junto a main.py).
+NOTES_FILE = Path(__file__).resolve().parent / "notes.json"
+
+## Carpeta donde se guardan las imágenes de pixel art del usuario (junto a main.py).
+PIXELART_DIR = Path(__file__).resolve().parent / "pixelart"
+
+## Carpeta con las imágenes de pixel art que se copian la primera vez que se arranca.
+PIXELART_DEFAULTS_DIR = Path(__file__).resolve().parent / "pixelart_defaults"
 
 
 def positive_float(value: str) -> float:
@@ -128,7 +140,7 @@ def build_spotify_client(args: argparse.Namespace) -> SpotifyClient:
     )
 
 
-def start_web(controller: Controller, publisher: FramePublisher):
+def start_web(controller: Controller, publisher: FramePublisher, notes: NotesStore, gallery: PixelArtStore):
     """
     @brief Arranca la interfaz web en segundo plano si las dependencias están instaladas.
 
@@ -136,12 +148,19 @@ def start_web(controller: Controller, publisher: FramePublisher):
 
     @param controller Controlador con el que se opera la matriz.
     @param publisher  Origen del fotograma para la vista previa.
+    @param notes      Almacén de notas del calendario (se gestionan en la página /notas).
+    @param gallery    Galería de pixel art (se gestiona en la página /imagenes).
     @return El servidor web en marcha, o None si no se ha podido arrancar.
     """
     try:
+        from web.notes_api import create_notes_router
+        from web.pixelart_api import create_pixelart_router
         from web.server import WebServer, create_app, local_urls
 
-        server = WebServer(create_app(controller, publisher))
+        app = create_app(controller, publisher)
+        app.include_router(create_notes_router(notes))
+        app.include_router(create_pixelart_router(gallery))
+        server = WebServer(app)
     except ImportError as exc:
         print(f"Web desactivada, faltan dependencias ({exc}). Instala con: pip install fastapi uvicorn", flush=True)
         return None
@@ -168,11 +187,15 @@ def run(args: argparse.Namespace) -> None:
     manager = SceneManager()
     poller: SpotifyPoller | None = None
     weather = poller_from_env()
+    notes = NotesStore(NOTES_FILE)
+    gallery = PixelArtStore(PIXELART_DIR)
+    gallery.install_defaults(PIXELART_DEFAULTS_DIR)
 
     if args.no_spotify:
         manager.register(ClockScene())
-        manager.register(CalendarScene())
+        manager.register(CalendarScene(notes=notes))
         manager.register(WeatherScene(weather))
+        manager.register(PixelArtScene(gallery))
         default_scene = "clock"
     else:
         spotify = build_spotify_client(args)
@@ -184,8 +207,9 @@ def run(args: argparse.Namespace) -> None:
         poller.start()
         manager.register(SpotifyRecordScene(poller))
         manager.register(ClockScene())
-        manager.register(CalendarScene())
+        manager.register(CalendarScene(notes=notes))
         manager.register(WeatherScene(weather))
+        manager.register(PixelArtScene(gallery))
         default_scene = "spotify_record"
 
     if not args.once:
@@ -195,7 +219,7 @@ def run(args: argparse.Namespace) -> None:
     controller = Controller(manager, SettingsStore(SETTINGS_FILE), display, default_scene)
     controller.restore()
     publisher = FramePublisher()
-    web = None if (args.no_web or args.once) else start_web(controller, publisher)
+    web = None if (args.no_web or args.once) else start_web(controller, publisher, notes, gallery)
 
     size = MATRIX_SIZE
     last_frame = time.monotonic()

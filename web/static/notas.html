@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111115">
+  <title>Notas · Matriz LED</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .back { color: var(--muted); text-decoration: none; font-size: .9rem; }
+    form { display: grid; gap: 12px; }
+    label { display: grid; gap: 6px; font-size: .85rem; color: var(--muted); }
+    input, select, button {
+      font: inherit; color: var(--text); background: #14141a; border: 1px solid var(--line);
+      border-radius: 12px; padding: 12px; min-height: 48px; width: 100%;
+    }
+    input[type="date"], input[type="time"] { color-scheme: dark; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .hint { font-size: .8rem; color: var(--muted); margin-top: -6px; }
+    .actions { display: grid; grid-template-columns: 1fr auto; gap: 12px; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; cursor: pointer; }
+    button.ghost { width: auto; background: transparent; cursor: pointer; }
+    ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+    li { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+    .when { font-size: .8rem; color: var(--muted); }
+    .text { word-break: break-word; }
+    .buttons { display: flex; gap: 8px; }
+    .buttons button { width: auto; min-height: 40px; padding: 8px 14px; cursor: pointer; }
+    .empty { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="/">← Volver a la matriz</a>
+    <h1>Notas</h1>
+
+    <section class="card">
+      <h2 id="form-title">Nueva nota</h2>
+      <form id="form">
+        <label>Texto
+          <input id="text" type="text" required autocomplete="off" placeholder="Dentista">
+        </label>
+        <p class="hint">En la matriz se verá en mayúsculas y sin tildes (la ñ sale como n).</p>
+        <div class="row">
+          <label>Fecha <input id="date" type="date" required></label>
+          <label>Hora (opcional) <input id="time" type="time"></label>
+        </div>
+        <label>Repetir
+          <select id="repeat"></select>
+        </label>
+        <div class="actions">
+          <button class="primary" type="submit" id="save">Añadir</button>
+          <button class="ghost" type="button" id="cancel" hidden>Cancelar</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Todas las notas</h2>
+      <ul id="list"></ul>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script>
+    "use strict";
+    const $ = (id) => document.getElementById(id);
+    let editing = null;
+    let repeatLabels = {};
+
+    function toast(message) {
+      const el = $("toast");
+      el.textContent = message;
+      el.classList.add("show");
+      clearTimeout(toast.timer);
+      toast.timer = setTimeout(() => el.classList.remove("show"), 3000);
+    }
+
+    async function api(method, url, body) {
+      const response = await fetch(url, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Error " + response.status);
+      return data;
+    }
+
+    function todayIso() {
+      const d = new Date();
+      d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+      return d.toISOString().slice(0, 10);
+    }
+
+    function formatDate(iso) {
+      const [y, m, d] = iso.split("-").map(Number);
+      return new Date(y, m - 1, d).toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+    }
+
+    function resetForm() {
+      editing = null;
+      $("form").reset();
+      $("date").value = todayIso();
+      $("form-title").textContent = "Nueva nota";
+      $("save").textContent = "Añadir";
+      $("cancel").hidden = true;
+    }
+
+    function startEdit(note) {
+      editing = note.id;
+      $("text").value = note.text;
+      $("date").value = note.date;
+      $("time").value = note.time;
+      $("repeat").value = note.repeat;
+      $("form-title").textContent = "Editar nota";
+      $("save").textContent = "Guardar";
+      $("cancel").hidden = false;
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function render(notes) {
+      const list = $("list");
+      list.replaceChildren();
+      if (!notes.length) {
+        const p = document.createElement("p");
+        p.className = "empty";
+        p.textContent = "Todavía no hay notas.";
+        list.append(p);
+        return;
+      }
+      for (const note of notes) {
+        const item = document.createElement("li");
+        const when = document.createElement("div");
+        when.className = "when";
+        const parts = [formatDate(note.date), note.time || "todo el día"];
+        if (note.repeat !== "none") parts.push(repeatLabels[note.repeat] || note.repeat);
+        when.textContent = parts.join(" · ");
+        const text = document.createElement("div");
+        text.className = "text";
+        text.textContent = note.text;
+        const buttons = document.createElement("div");
+        buttons.className = "buttons";
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = "Editar";
+        edit.addEventListener("click", () => startEdit(note));
+        const del = document.createElement("button");
+        del.type = "button";
+        del.textContent = "Borrar";
+        del.addEventListener("click", async () => {
+          if (!confirm("¿Borrar esta nota?")) return;
+          try { await api("DELETE", "/api/notes/" + note.id); if (editing === note.id) resetForm(); await load(); }
+          catch (error) { toast(error.message); }
+        });
+        buttons.append(edit, del);
+        item.append(when, text, buttons);
+        list.append(item);
+      }
+    }
+
+    async function load() {
+      const data = await api("GET", "/api/notes");
+      repeatLabels = Object.fromEntries(data.repeats.map((r) => [r.value, r.label]));
+      if (!$("repeat").options.length) {
+        for (const r of data.repeats) $("repeat").add(new Option(r.label, r.value));
+        $("text").maxLength = data.max_length;
+      }
+      render(data.notes);
+    }
+
+    $("form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const body = { text: $("text").value, date: $("date").value, time: $("time").value, repeat: $("repeat").value };
+      try {
+        if (editing) await api("PUT", "/api/notes/" + editing, body);
+        else await api("POST", "/api/notes", body);
+        resetForm();
+        await load();
+      } catch (error) { toast(error.message); }
+    });
+    $("cancel").addEventListener("click", resetForm);
+
+    resetForm();
+    load().catch((error) => toast(error.message));
+  </script>
+</body>
+</html>

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111115">
+  <title>Imágenes · Matriz LED</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .back { color: var(--muted); text-decoration: none; font-size: .9rem; }
+    form { display: grid; gap: 12px; }
+    label { display: grid; gap: 6px; font-size: .85rem; color: var(--muted); }
+    input, select, button {
+      font: inherit; color: var(--text); background: #14141a; border: 1px solid var(--line);
+      border-radius: 12px; padding: 12px; min-height: 48px; width: 100%;
+    }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    .hint { font-size: .8rem; color: var(--muted); margin: 0; }
+    /* Miniatura cuadrada: la imagen ya viene recortada al círculo de la estructura (negro por fuera). */
+    .thumb { position: relative; width: 100%; max-width: 192px; aspect-ratio: 1; background: #000; border-radius: 8px; overflow: hidden; justify-self: center; }
+    .thumb img { width: 100%; height: 100%; image-rendering: pixelated; display: block; }
+    .center { display: grid; gap: 8px; justify-items: center; }
+    ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    li { border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: grid; gap: 8px; justify-items: center; }
+    li .thumb { max-width: 150px; }
+    .name { font-size: .9rem; word-break: break-word; text-align: center; }
+    .tag { font-size: .7rem; color: var(--muted); }
+    li button { min-height: 40px; padding: 8px 14px; cursor: pointer; background: transparent; }
+    .empty { color: var(--muted); grid-column: 1 / -1; }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="/">← Volver a la matriz</a>
+    <h1>Imágenes</h1>
+
+    <section class="card">
+      <h2>Subir imagen</h2>
+      <form id="form">
+        <label>Archivo (PNG, GIF o JPG, hasta 2 MB)
+          <input id="file" type="file" accept="image/png,image/gif,image/jpeg,image/webp" required>
+        </label>
+        <label>Nombre
+          <input id="name" type="text" required maxlength="24" autocomplete="off" placeholder="Mi dibujo">
+        </label>
+        <p class="hint">La imagen se ajusta sola al círculo de la estructura. Si es casi cuadrada y llena todo el cuadro, llena el círculo como una portada de Spotify; si no, se encoge para verse entera.</p>
+        <div class="center">
+          <div class="thumb" id="preview-box" hidden><img id="preview" alt="Vista previa"></div>
+          <span class="tag" id="preview-info"></span>
+        </div>
+        <button class="primary" type="submit" id="save" disabled>Guardar</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2 id="count-title">Galería</h2>
+      <ul id="list"></ul>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script>
+    "use strict";
+    const $ = (id) => document.getElementById(id);
+    let fileData = null;
+
+    function toast(message) {
+      const el = $("toast");
+      el.textContent = message;
+      el.classList.add("show");
+      clearTimeout(toast.timer);
+      toast.timer = setTimeout(() => el.classList.remove("show"), 3500);
+    }
+
+    async function api(method, url, body) {
+      const response = await fetch(url, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Error " + response.status);
+      return data;
+    }
+
+    function readFile(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("No se pudo leer el archivo."));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function updatePreview() {
+      $("save").disabled = true;
+      if (!fileData) { $("preview-box").hidden = true; $("preview-info").textContent = ""; return; }
+      try {
+        const result = await api("POST", "/api/pixelart/preview", { data: fileData });
+        $("preview").src = "data:image/png;base64," + result.image;
+        $("preview-box").hidden = false;
+        $("preview-info").textContent = result.frames > 1 ? "GIF animado · " + result.frames + " fotogramas (se ve el primero)" : "Imagen fija";
+        $("save").disabled = false;
+      } catch (error) {
+        $("preview-box").hidden = true;
+        $("preview-info").textContent = "";
+        toast(error.message);
+      }
+    }
+
+    function thumb(src) {
+      const box = document.createElement("div");
+      box.className = "thumb";
+      const img = document.createElement("img");
+      img.src = src;
+      img.alt = "";
+      box.append(img);
+      return box;
+    }
+
+    async function load() {
+      const data = await api("GET", "/api/pixelart");
+      $("count-title").textContent = "Galería · " + data.images.length + " de " + data.max;
+      const list = $("list");
+      list.replaceChildren();
+      if (!data.images.length) {
+        const p = document.createElement("p");
+        p.className = "empty";
+        p.textContent = "Todavía no hay imágenes.";
+        list.append(p);
+      }
+      for (const image of data.images) {
+        const item = document.createElement("li");
+        const name = document.createElement("div");
+        name.className = "name";
+        name.textContent = image.label;
+        const tag = document.createElement("div");
+        tag.className = "tag";
+        tag.textContent = image.animated ? "GIF animado" : "Imagen fija";
+        const del = document.createElement("button");
+        del.type = "button";
+        del.textContent = "Borrar";
+        del.addEventListener("click", async () => {
+          if (!confirm("¿Borrar «" + image.label + "»?")) return;
+          try { await api("DELETE", "/api/pixelart/" + image.id); await load(); }
+          catch (error) { toast(error.message); }
+        });
+        item.append(thumb("/api/pixelart/" + image.id + "/image?v=" + Date.now()), name, tag, del);
+        list.append(item);
+      }
+    }
+
+    $("file").addEventListener("change", async () => {
+      const file = $("file").files[0];
+      fileData = null;
+      if (file) {
+        if (!$("name").value) $("name").value = file.name.replace(/\.[^.]+$/, "").slice(0, 24);
+        try { fileData = await readFile(file); } catch (error) { toast(error.message); }
+      }
+      updatePreview();
+    });
+
+    $("form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      $("save").disabled = true;
+      try {
+        await api("POST", "/api/pixelart", { name: $("name").value, data: fileData });
+        $("form").reset();
+        fileData = null;
+        $("preview-box").hidden = true;
+        $("preview-info").textContent = "";
+        await load();
+        toast("Imagen guardada");
+      } catch (error) { toast(error.message); $("save").disabled = false; }
+    });
+
+    load().catch((error) => toast(error.message));
+  </script>
+</body>
+</html>
