@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111115">
+  <title>Matriz LED</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <h1>Matriz LED</h1>
+
+    <section class="card preview">
+      <img id="preview" alt="Vista previa en vivo de la matriz" width="64" height="64">
+    </section>
+
+    <section class="card">
+      <h2>Modo</h2>
+      <div id="scenes" class="chips"></div>
+    </section>
+
+    <section class="card" id="settings-card" hidden>
+      <h2 id="settings-title">Ajustes</h2>
+      <div id="settings"></div>
+    </section>
+
+    <section class="card">
+      <h2>Brillo</h2>
+      <div id="brightness"></div>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

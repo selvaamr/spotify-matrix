@@ -5,8 +5,12 @@
 from __future__ import annotations
 
 import threading
+from typing import Any
+
 from PIL import Image
+
 from core.scene import Scene
+
 
 class SceneManager:
     """
@@ -36,14 +40,33 @@ class SceneManager:
     def names(self) -> list[str]:
         """
         @brief Lista los nombres de las escenas registradas.
-        @return Lista de identificadores de escena.
+        @return Lista de identificadores de escena, en orden de registro.
         """
-        return list(self._scenes)
+        with self._lock:
+            return list(self._scenes)
+
+    def get(self, name: str) -> Scene:
+        """
+        @brief Devuelve una escena registrada por su nombre.
+        @param name Identificador de la escena.
+        @return Instancia de la escena.
+        @throws KeyError si no existe ninguna escena con ese nombre.
+        """
+        with self._lock:
+            if name not in self._scenes:
+                raise KeyError(f"Unknown scene: {name}")
+            return self._scenes[name]
 
     @property
     def current(self) -> Scene | None:
         """@brief Escena activa, o None si no hay ninguna."""
         return self._current
+
+    @property
+    def current_name(self) -> str | None:
+        """@brief Identificador de la escena activa, o None si no hay ninguna."""
+        current = self._current
+        return current.name if current else None
 
     def set_scene(self, name: str) -> None:
         """
@@ -52,12 +75,21 @@ class SceneManager:
         @throws KeyError si no existe ninguna escena con ese nombre.
         """
         with self._lock:
-            if name not in self._scenes:
-                raise KeyError(f"Unknown scene: {name}")
+            scene = self.get(name)
             if self._current is not None:
                 self._current.on_exit()
-            self._current = self._scenes[name]
+            self._current = scene
             self._current.on_enter()
+
+    def configure(self, name: str, **values: Any) -> None:
+        """
+        @brief Modifica los ajustes de una escena de forma segura entre hilos.
+        @param name   Identificador de la escena.
+        @param values Pares clave=valor (ver Scene::configure).
+        @throws KeyError si no existe ninguna escena con ese nombre.
+        """
+        with self._lock:
+            self.get(name).configure(**values)
 
     def update(self, dt: float) -> None:
         """

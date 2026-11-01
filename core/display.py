@@ -94,6 +94,13 @@ class MatrixDisplay:
         self.canvas.SetImage(image.convert("RGB"))
         self.canvas = self.matrix.SwapOnVSync(self.canvas)
 
+    def set_brightness(self, value: int) -> None:
+        """
+        @brief Cambia el brillo de la matriz en caliente.
+        @param value Brillo de 0 a 100.
+        """
+        self.matrix.brightness = max(0, min(100, int(value)))
+
     def clear(self) -> None:
         """@brief Apaga todos los LEDs."""
         self._last_image = None
@@ -122,6 +129,13 @@ class MockDisplay:
         @param image Fotograma a guardar.
         """
         image.save(self.output)
+
+    def set_brightness(self, value: int) -> None:
+        """
+        @brief No hace nada (el PNG simulado no tiene brillo).
+        @param value Brillo de 0 a 100 (se ignora).
+        """
+        return
 
     def clear(self) -> None:
         """@brief No hace nada (no hay LEDs que apagar)."""

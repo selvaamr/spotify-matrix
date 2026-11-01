@@ -3,10 +3,15 @@
 @file main.py
 @brief Punto de entrada: lee los argumentos, crea pantalla, escenas y ejecuta el bucle principal.
 
+Además de dibujar, arranca la interfaz web (ver web/server.py) en un hilo aparte.
+Los ajustes (escena, velocidad, diseño, brillo...) se cambian desde la web y se
+guardan en settings.json, por lo que el comando de arranque no necesita parámetros.
+El tiempo se descarga de Open-Meteo en segundo plano (ver services/weather.py).
+
 @par Uso
 @code
-python3 main.py                                   # disco de Spotify en la matriz
-python3 main.py --test-pattern --mock-output out/frame.png --once
+sudo -E .venv/bin/python main.py                  # arranque normal (matriz + web)
+python3 main.py --no-spotify --mock-output out/frame.png --once   # prueba sin hardware ni Spotify
 @endcode
 """
 from __future__ import annotations
@@ -22,11 +27,20 @@ except ImportError:
     def load_dotenv() -> None:
         return None
 
-from core.display import DEFAULT_BRIGHTNESS, MATRIX_SIZE, MatrixDisplay, MockDisplay
+from core.controller import Controller
+from core.display import MATRIX_SIZE, MatrixDisplay, MockDisplay
 from core.manager import SceneManager
-from scenes.spotify_record import DEFAULT_STYLE, STYLES, SpotifyRecordScene, demo_album_art, render_record
-from scenes.test_pattern import TestPatternScene
+from core.preview import FramePublisher
+from core.settings import SettingsStore
+from scenes.calendar_scene import CalendarScene
+from scenes.clock import ClockScene
+from scenes.spotify_record import STYLES, SpotifyRecordScene, demo_album_art, render_record
+from scenes.weather import WeatherScene
 from services.spotify import SpotifyClient, SpotifyPoller
+from services.weather import poller_from_env
+
+## Archivo donde se guardan los ajustes del usuario (junto a main.py, esté donde esté el directorio de trabajo).
+SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 
 
 def positive_float(value: str) -> float:
@@ -60,12 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
     @return Parser de argparse configurado.
     """
     parser = argparse.ArgumentParser(description="Spin Spotify album art on a 64x64 RGB matrix.")
-    parser.add_argument("--brightness", type=int, default=DEFAULT_BRIGHTNESS)
-    parser.add_argument("--style", choices=list(STYLES), default=DEFAULT_STYLE,
-                        help="Diseño del disco: " + ", ".join(f"{k} ({v[0]})" for k, v in STYLES.items()))
     parser.add_argument("--poll-seconds", type=positive_float, default=2.0)
     parser.add_argument("--fps", type=positive_float, default=20.0)
-    parser.add_argument("--rpm", type=positive_float, default=20.0)
     parser.add_argument("--token-cache", type=Path, default=Path(".cache/spotify_token.json"))
     parser.add_argument("--mock-output", type=Path,
                         help="Write the current frame PNG instead of using RGB matrix hardware.")
@@ -73,9 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Render sample spinning-album-art disk frames and exit.")
     parser.add_argument("--auth-only", action="store_true",
                         help="Authorize Spotify, cache the token, and exit without using the matrix.")
-    parser.add_argument("--test-pattern", action="store_true",
-                        help="Show a bright moving color test pattern without using Spotify.")
+    parser.add_argument("--no-spotify", action="store_true",
+                        help="No usar Spotify: solo las escenas de reloj, calendario y tiempo.")
     parser.add_argument("--once", action="store_true", help="Render one frame and exit.")
+    parser.add_argument("--no-web", action="store_true", help="No arrancar la interfaz web.")
     parser.add_argument("--no-browser", action="store_true",
                         help="Print the Spotify auth URL without trying to open a browser.")
     return parser
@@ -117,12 +128,35 @@ def build_spotify_client(args: argparse.Namespace) -> SpotifyClient:
     )
 
 
+def start_web(controller: Controller, publisher: FramePublisher):
+    """
+    @brief Arranca la interfaz web en segundo plano si las dependencias están instaladas.
+
+    Si faltan fastapi o uvicorn no es un error: el programa sigue funcionando sin web.
+
+    @param controller Controlador con el que se opera la matriz.
+    @param publisher  Origen del fotograma para la vista previa.
+    @return El servidor web en marcha, o None si no se ha podido arrancar.
+    """
+    try:
+        from web.server import WebServer, create_app, local_urls
+
+        server = WebServer(create_app(controller, publisher))
+    except ImportError as exc:
+        print(f"Web desactivada, faltan dependencias ({exc}). Instala con: pip install fastapi uvicorn", flush=True)
+        return None
+
+    server.start()
+    print("Interfaz web disponible en: " + "  o  ".join(local_urls(server.port)), flush=True)
+    return server
+
+
 def run(args: argparse.Namespace) -> None:
     """
     @brief Ejecuta el programa según los argumentos recibidos.
 
-    Registra las escenas, activa la inicial y ejecuta el bucle principal
-    (update + render + show) hasta Ctrl+C, o un solo fotograma con --once.
+    Registra las escenas, restaura los ajustes guardados, arranca la web y ejecuta el
+    bucle principal (update + render + show) hasta Ctrl+C, o un solo fotograma con --once.
 
     @param args Argumentos de línea de comandos ya interpretados.
     """
@@ -133,10 +167,13 @@ def run(args: argparse.Namespace) -> None:
     load_dotenv()
     manager = SceneManager()
     poller: SpotifyPoller | None = None
+    weather = poller_from_env()
 
-    if args.test_pattern:
-        manager.register(TestPatternScene())
-        manager.set_scene("test_pattern")
+    if args.no_spotify:
+        manager.register(ClockScene())
+        manager.register(CalendarScene())
+        manager.register(WeatherScene(weather))
+        default_scene = "clock"
     else:
         spotify = build_spotify_client(args)
         if args.auth_only:
@@ -145,10 +182,21 @@ def run(args: argparse.Namespace) -> None:
             return
         poller = SpotifyPoller(spotify, args.poll_seconds)
         poller.start()
-        manager.register(SpotifyRecordScene(poller, rpm=args.rpm, style=args.style))
-        manager.set_scene("spotify_record")
+        manager.register(SpotifyRecordScene(poller))
+        manager.register(ClockScene())
+        manager.register(CalendarScene())
+        manager.register(WeatherScene(weather))
+        default_scene = "spotify_record"
 
-    display = MockDisplay(args.mock_output) if args.mock_output else MatrixDisplay(args.brightness)
+    if not args.once:
+        weather.start()
+
+    display = MockDisplay(args.mock_output) if args.mock_output else MatrixDisplay()
+    controller = Controller(manager, SettingsStore(SETTINGS_FILE), display, default_scene)
+    controller.restore()
+    publisher = FramePublisher()
+    web = None if (args.no_web or args.once) else start_web(controller, publisher)
+
     size = MATRIX_SIZE
     last_frame = time.monotonic()
 
@@ -159,7 +207,9 @@ def run(args: argparse.Namespace) -> None:
             last_frame = frame_start
 
             manager.update(delta)
-            display.show(manager.render(size))
+            frame = manager.render(size)
+            publisher.publish(frame)
+            display.show(frame)
 
             if args.once:
                 break
@@ -168,8 +218,12 @@ def run(args: argparse.Namespace) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if web:
+            web.stop()
+        controller.shutdown()
         if poller:
             poller.stop()
+        weather.stop()
         display.clear()
 
 

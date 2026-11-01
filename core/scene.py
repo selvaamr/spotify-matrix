@@ -48,15 +48,24 @@ class Scene:
         """
         @brief Actualiza ajustes de la escena.
 
-        Las claves desconocidas se ignoran, los valores numéricos se limitan al rango
-        "min"/"max" definido en settings_schema y, en los ajustes de tipo "choice",
-        los valores que no estén entre las opciones válidas se descartan.
+        Las claves desconocidas se ignoran, los valores numéricos se convierten al tipo
+        del ajuste ("float" o "int") y se limitan al rango "min"/"max" definido en
+        settings_schema y, en los ajustes de tipo "choice", los valores que no estén
+        entre las opciones válidas se descartan. Un valor que no se pueda convertir
+        (p. ej. texto en un ajuste numérico) también se descarta, sin lanzar excepción.
 
         @param values Pares clave=valor con los ajustes a modificar.
         """
         for key, value in values.items():
             spec = self.settings_schema.get(key)
             if spec is None:
+                continue
+            try:
+                if spec.get("type") == "float":
+                    value = float(value)
+                elif spec.get("type") == "int":
+                    value = int(value)
+            except (TypeError, ValueError):
                 continue
             if "choices" in spec:
                 valid = [c["value"] if isinstance(c, dict) else c for c in spec["choices"]]
