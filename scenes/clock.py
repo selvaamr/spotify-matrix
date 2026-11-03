@@ -2,6 +2,10 @@
 @file clock.py
 @brief Escena de reloj: digital o grande, con varias tipografías y colores.
 
+Las tipografías "Pixel 1" y "Pixel 2" reproducen los números de las fuentes Pixelya y Pixelfy.
+Sus dígitos están copiados aquí como rejillas de puntos (no se lee ningún archivo .ttf), así que
+cada punto de la fuente cae exactamente en uno o varios LEDs y no sale borroso.
+
 Está pensada para una matriz de 64x64 con una estructura circular delante: todo el contenido
 se coloca dentro de un círculo de unos 30 píxeles de radio, para que no se corte por las esquinas.
 Los dígitos se dibujan con fuentes de píxeles propias, así que no depende de ninguna fuente
@@ -30,7 +34,62 @@ from scenes.pixeltext import (
 REF_SIZE = 64
 
 ## Tipografías de la hora: identificador -> nombre visible.
-FONTS = {"block": "Bloque", "round": "Redondeada", "segments": "Segmentos"}
+FONTS = {
+    "block": "Bloque",
+    "round": "Redondeada",
+    "segments": "Segmentos",
+    "pixel1": "Pixel 1",
+    "pixel2": "Pixel 2",
+}
+
+## Dígitos de las tipografías de mapa de bits, sacados de las fuentes Pixelya ("pixel1", 7 filas) y
+## Pixelfy ("pixel2", 10 filas): carácter -> filas separadas por "/" ("#" encendido, "." apagado).
+_BITMAP_SOURCE = {
+    "pixel1": {
+        "0": ".####./##..##/##..##/##..##/##..##/##..##/.####.",
+        "1": "##./.##/.##/.##/.##/.##/.#.",
+        "2": "####./##.##/...##/.###./##.../##.##/#####",
+        "3": "####./##.##/...##/.###./...##/##.##/####.",
+        "4": ".##.#./.##.##/.#..##/##..##/######/....##/....#.",
+        "5": "#####/##.##/##.../.###./...##/##.##/####.",
+        "6": ".####./##.##./##..../#####./##..##/##..##/.####.",
+        "7": "#####/##..#/...##/..##./.##../.##../.##..",
+        "8": ".####./##..##/##..##/.####./##..##/##..##/.####.",
+        "9": ".####./##..##/##..##/.#####/....##/##..##/.####.",
+    },
+    "pixel2": {
+        "0": "...##.../.##..##./##....##/##....##/##....##/##....##/##....##/##....##/.##..##./...##...",
+        "1": "...##/..###/.####/#####/...##/...##/...##/...##/...##/...##",
+        "2": ".#####./##....#/##....#/##....#/......#/#######/##...../##...../#######/.#####.",
+        "3": ".#####./##...##/##...##/###..##/.....##/..####./.....##/###..##/##...##/.#####.",
+        "4": "...####/..#####/.###.##/###..##/#....##/#######/#######/.....##/.....##/.....##",
+        "5": ".#######/###....#/##....##/##....../########/.......#/#......#/##.....#/########/.######.",
+        "6": ".######/#######/##....#/##...##/##...../##...../#######/##....#/##....#/.######",
+        "7": "######/#...##/.#..##/....##/....##/....##/....##/....##/....##/....##",
+        "8": ".#####./##...##/##...##/##...##/##...##/..###../##...##/##...##/##...##/.#####.",
+        "9": "#######/#....##/#...###/##..###/#######/.....##/#....##/##...##/####.##/#######",
+    },
+}
+
+## Dígitos ya interpretados: tipografía -> carácter -> tupla de filas.
+_BITMAP_DIGITS = {
+    font: {char: tuple(rows.split("/")) for char, rows in digits.items()}
+    for font, digits in _BITMAP_SOURCE.items()
+}
+
+## Tamaño en LEDs de cada punto de las tipografías de mapa de bits, según el estilo:
+## (tipografía, estilo) -> (ancho de celda, alto de celda, ancho del punto, alto del punto).
+## Si el punto es más pequeño que la celda, queda una línea apagada entre puntos (efecto matriz).
+_BITMAP_CELLS = {
+    ("pixel1", "digital"): (2, 3, 2, 2),
+    ("pixel1", "stacked"): (2, 2, 2, 2),
+    ("pixel2", "digital"): (1, 2, 1, 2),
+    ("pixel2", "stacked"): (1, 1, 1, 1),
+}
+
+## Tamaño final (ancho, alto) al que se amplían algunos dígitos, cuando ningún tamaño de punto entero
+## encaja bien. Pixel 2 en el estilo grande se amplía a 12x15, como las tipografías Bloque y Redondeada.
+_BITMAP_FIT = {("pixel2", "stacked"): (12, 15)}
 
 ## Segmentos encendidos de cada dígito en la tipografía "Segmentos" (a=arriba, b=arriba dcha., c=abajo dcha.,
 ## d=abajo, e=abajo izda., f=arriba izda., g=centro).
@@ -153,6 +212,55 @@ def _draw_digit(image: Image.Image, font: str, char: str, x: int, y: int, sx: in
     image.paste(color, (x, y), mask)
 
 
+def _is_bitmap(font: str) -> bool:
+    """
+    @brief Indica si una tipografía es de mapa de bits (Pixel 1 o Pixel 2).
+    @param font Identificador de tipografía.
+    @return true si sus dígitos salen de _BITMAP_DIGITS.
+    """
+    return font in _BITMAP_DIGITS
+
+
+@lru_cache(maxsize=None)
+def _bitmap_mask(font: str, char: str, style: str) -> Image.Image:
+    """
+    @brief Máscara (con caché) de un dígito de una tipografía de mapa de bits.
+
+    Todos los dígitos de una tipografía tienen el mismo ancho (el del más ancho), con el número
+    centrado, para que la hora no "baile" al cambiar los minutos.
+
+    @param font  "pixel1" o "pixel2".
+    @param char  Dígito.
+    @param style "digital" o "stacked" (decide el tamaño de los puntos).
+    @return Imagen "L"; 255 donde se dibuja. No debe modificarse.
+    """
+    cw, ch, dw, dh = _BITMAP_CELLS[(font, style)]
+    digits = _BITMAP_DIGITS[font]
+    cols = max(len(rows[0]) for rows in digits.values())
+    rows = digits[char]
+    width, height = cols * cw, len(rows) * ch - (ch - dh)
+    mask = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(mask)
+    offset = (cols - len(rows[0])) * cw // 2
+    for row_index, row in enumerate(rows):
+        for col_index, cell in enumerate(row):
+            if cell == "#":
+                x0, y0 = offset + col_index * cw, row_index * ch
+                draw.rectangle((x0, y0, x0 + dw - 1, y0 + dh - 1), fill=255)
+    fit = _BITMAP_FIT.get((font, style))
+    return mask.resize(fit, Image.Resampling.NEAREST) if fit else mask
+
+
+def _bitmap_size(font: str, style: str) -> tuple[int, int]:
+    """
+    @brief Tamaño en píxeles de los dígitos de una tipografía de mapa de bits.
+    @param font  "pixel1" o "pixel2".
+    @param style "digital" o "stacked".
+    @return Tupla (ancho, alto).
+    """
+    return _bitmap_mask(font, "8", style).size
+
+
 def _draw_colon(image: Image.Image, font: str, x: int, y: int, height: int, color: Color) -> None:
     """
     @brief Dibuja los dos puntos que separan horas y minutos, con el estilo de la tipografía.
@@ -254,8 +362,11 @@ class ClockScene(Scene):
         if key == self._cache_key and self._cache_image is not None:
             return self._cache_image
 
-        render = self._render_stacked if self.settings["style"] == "stacked" else self._render_digital
-        frame = render()
+        stacked = self.settings["style"] == "stacked"
+        if _is_bitmap(self._font()):
+            frame = self._render_stacked_bitmap() if stacked else self._render_digital_bitmap()
+        else:
+            frame = self._render_stacked() if stacked else self._render_digital()
         if size != REF_SIZE:
             frame = frame.resize((size, size), Image.Resampling.NEAREST)
 
@@ -373,4 +484,71 @@ class ClockScene(Scene):
             draw_text(draw, x0 + 30, y + row - 2, ampm, 1, dim(color, 0.7))
         line = self._date_line()
         draw_text(draw, (REF_SIZE - text_width(line, 1)) // 2, y + 2 * row + 3 + 5, line, 1, dim(color, 0.7))
+        return image
+
+    def _render_digital_bitmap(self) -> Image.Image:
+        """
+        @brief Estilo digital con Pixel 1 o Pixel 2: HH:MM centrado y, debajo, la fecha.
+        @return Fotograma RGB de 64x64.
+        """
+        color, font = self._color(), self._font()
+        hours, ampm = self._hour_text()
+        width, height = _bitmap_size(font, "digital")
+        pair_gap = 1 if width >= 12 else 2  # con dígitos anchos se juntan un poco para caber en el círculo
+        colon_w, gap, line_height = 6, 6, 5
+        y = (REF_SIZE - (height + gap + line_height)) // 2
+
+        one_digit = hours.startswith(" ")
+        hours_w = width if one_digit else 2 * width + pair_gap
+        total = hours_w + colon_w + 2 * width + pair_gap
+        x = (REF_SIZE - total) // 2
+
+        image = Image.new("RGB", (REF_SIZE, REF_SIZE), (0, 0, 0))
+        for char in hours.strip():
+            image.paste(color, (x, y), _bitmap_mask(font, char, "digital"))
+            x += width + pair_gap
+        x += colon_w - pair_gap
+        if self._colon_visible():
+            colon_x = x - colon_w + (colon_w - 2) // 2
+            for ratio in (0.32, 0.68):
+                top = y + round(height * ratio) - 1
+                image.paste(color, (colon_x, top, colon_x + 2, top + 2))
+        for char in f"{self._now.minute:02d}":
+            image.paste(color, (x, y), _bitmap_mask(font, char, "digital"))
+            x += width + pair_gap
+
+        draw = ImageDraw.Draw(image)
+        line = self._date_line(ampm)
+        draw_text(draw, (REF_SIZE - text_width(line, 1)) // 2, y + height + gap, line, 1, dim(color, 0.7))
+        return image
+
+    def _render_stacked_bitmap(self) -> Image.Image:
+        """
+        @brief Estilo grande con Pixel 1 o Pixel 2: las horas sobre los minutos y, debajo, la fecha.
+        @return Fotograma RGB de 64x64.
+        """
+        color, font = self._color(), self._font()
+        hours, ampm = self._hour_text()
+        width, height = _bitmap_size(font, "stacked")
+        pair_gap, row_gap, date_gap, line_height = 3, 3, 5, 5
+        block_w = 2 * width + pair_gap
+        x0 = (REF_SIZE - block_w) // 2
+        y = (REF_SIZE - (2 * height + row_gap + date_gap + line_height)) // 2
+
+        image = Image.new("RGB", (REF_SIZE, REF_SIZE), (0, 0, 0))
+        if hours.startswith(" "):
+            image.paste(color, ((REF_SIZE - width) // 2, y), _bitmap_mask(font, hours[1], "stacked"))
+        else:
+            image.paste(color, (x0, y), _bitmap_mask(font, hours[0], "stacked"))
+            image.paste(color, (x0 + width + pair_gap, y), _bitmap_mask(font, hours[1], "stacked"))
+        minutes = f"{self._now.minute:02d}"
+        y_min = y + height + row_gap
+        image.paste(color, (x0, y_min), _bitmap_mask(font, minutes[0], "stacked"))
+        image.paste(color, (x0 + width + pair_gap, y_min), _bitmap_mask(font, minutes[1], "stacked"))
+
+        draw = ImageDraw.Draw(image)
+        if ampm:
+            draw_text(draw, x0 + block_w + 2, y + height - 2, ampm, 1, dim(color, 0.7))
+        line = self._date_line()
+        draw_text(draw, (REF_SIZE - text_width(line, 1)) // 2, y_min + height + date_gap, line, 1, dim(color, 0.7))
         return image

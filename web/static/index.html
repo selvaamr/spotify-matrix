@@ -4,12 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#111115">
-  <title>Matriz LED</title>
+  <title>KATXI MATRIX</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&display=swap">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <main>
-    <h1>Matriz LED</h1>
+    <h1 class="titulo">KATXI MATRIX</h1>
 
     <section class="card preview">
       <img id="preview" alt="Vista previa en vivo de la matriz" width="64" height="64">
@@ -17,7 +20,7 @@
 
     <section class="card">
       <h2>Modo</h2>
-      <div id="scenes" class="chips"></div>
+      <div id="scenes" class="modes"></div>
     </section>
 
     <section class="card" id="settings-card" hidden>
@@ -30,12 +33,12 @@
       <div id="brightness"></div>
     </section>
 
-    <section class="card">
+    <section class="card" id="notes-card" hidden>
       <h2>Notas</h2>
       <a class="chip" href="/notas" style="display:inline-flex;align-items:center;text-decoration:none">Gestionar notas del calendario</a>
     </section>
 
-    <section class="card">
+    <section class="card" id="images-card" hidden>
       <h2>Imágenes</h2>
       <a class="chip" href="/imagenes" style="display:inline-flex;align-items:center;text-decoration:none">Gestionar imágenes de pixel art</a>
     </section>

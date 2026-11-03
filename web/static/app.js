@@ -26,6 +26,28 @@ let lastStateJson = "";
 /** @brief true mientras el usuario toca un control (evita redibujarlo bajo su dedo). */
 let interacting = false;
 
+/**
+ * @brief Icono de cada modo. Se busca la primera palabra que aparezca en el nombre o la etiqueta de la escena.
+ */
+const SCENE_ICONS = [
+  { match: ["spotify", "disco", "vinilo"], icon: "spotify" },
+  { match: ["reloj", "clock", "hora"], icon: "reloj" },
+  { match: ["tiempo", "clima", "weather"], icon: "tiempo" },
+  { match: ["calendario", "calendar"], icon: "calendario" },
+  { match: ["pixel", "imagen", "image"], icon: "pixelart" },
+];
+
+/**
+ * @brief Devuelve el icono de una escena.
+ * @param {Object} scene Escena (name, label).
+ * @return {string|null} Nombre del icono (sin extensión) o null si no tiene.
+ */
+function sceneIcon(scene) {
+  const text = `${scene.name} ${scene.label}`.toLowerCase();
+  const found = SCENE_ICONS.find((entry) => entry.match.some((word) => text.includes(word)));
+  return found ? found.icon : null;
+}
+
 /** @brief Atajo para document.getElementById. */
 const $ = (id) => document.getElementById(id);
 
@@ -126,24 +148,37 @@ function throttle(fn, ms) {
  * @param {number} options.step Paso.
  * @param {number} options.value Valor inicial.
  * @param {function(number): void} options.onChange Se llama (limitada en frecuencia) al mover el deslizador y una vez más al soltarlo.
+ * @param {string} [options.variant] Estilo especial de la barra ("speed" o "brightness").
+ * @param {boolean} [options.showValue] Si es false no se muestra el número.
  * @return {HTMLElement} Contenedor del control.
  */
-function buildSlider({ label, min, max, step, value, onChange }) {
+function buildSlider({ label, min, max, step, value, onChange, variant, showValue = true }) {
   const decimals = step < 1 ? 1 : 0;
   const output = el("span", { className: "control-value", textContent: Number(value).toFixed(decimals) });
   const input = el("input", { type: "range", min, max, step, value });
+  if (variant) input.classList.add(`range-${variant}`);
+  if (!label) input.setAttribute("aria-label", "Brillo");
   const send = throttle(onChange, SEND_INTERVAL_MS);
+
+  /** Pasa al CSS la posición de la bolita (0 a 1) para rellenar la barra solo hasta ahí. */
+  const updateFill = () => {
+    const ratio = (Number(input.value) - min) / (max - min || 1);
+    input.style.setProperty("--p", String(ratio));
+  };
+  updateFill();
 
   input.addEventListener("input", () => {
     output.textContent = Number(input.value).toFixed(decimals);
+    updateFill();
     send(Number(input.value));
   });
   input.addEventListener("change", () => onChange(Number(input.value)));
 
-  return el("div", { className: "control" }, [
-    el("div", { className: "control-head" }, [el("span", { textContent: label }), output]),
-    input,
-  ]);
+  const head = [];
+  if (label) head.push(el("span", { textContent: label }));
+  if (showValue) head.push(output);
+  const children = head.length ? [el("div", { className: "control-head" }, head), input] : [input];
+  return el("div", { className: "control" }, children);
 }
 
 /**
@@ -163,11 +198,12 @@ function buildChoice({ label, choices, value, onChange }) {
     chip.addEventListener("click", () => onChange(choice.value));
     chips.appendChild(chip);
   });
-  return el("div", { className: "control" }, [
-    el("div", { className: "control-head" }, [el("span", { textContent: label })]),
-    chips,
-  ]);
+  const children = label ? [el("div", { className: "control-head" }, [el("span", { textContent: label })]), chips] : [chips];
+  return el("div", { className: "control" }, children);
 }
+
+/** @brief Etiquetas de ajustes que no se muestran (solo se ven sus botones). */
+const HIDDEN_LABELS = [/dise[ñn]o del disco/i];
 
 /**
  * @brief Construye un selector de color: una fila de círculos, cada uno con su color (sin texto).
@@ -196,6 +232,48 @@ function buildColor({ label, choices, value, onChange }) {
 }
 
 /**
+ * @brief Construye el selector del reloj: tipografías en columna a la izquierda y, a la derecha,
+ *        los dos estilos como círculos con una vista previa de cómo se verá la matriz.
+ *
+ * Las vistas previas son imágenes en blanco (static/icons/clock/<estilo>-<tipografía>.png) que se
+ * usan como máscara y se pintan con el color elegido, así siempre coinciden con los ajustes.
+ *
+ * @param {Object} scene Escena del reloj.
+ * @param {Object} styleSpec Ajuste "style" del esquema.
+ * @param {Object} fontSpec Ajuste "font" del esquema.
+ * @return {HTMLElement} Contenedor del control.
+ */
+function buildClockPicker(scene, styleSpec, fontSpec) {
+  const settings = scene.settings;
+  const colorSpec = scene.schema.find((spec) => spec.type === "color");
+  const colorChoice = colorSpec && colorSpec.choices.find((choice) => choice.value === settings[colorSpec.key]);
+  const ledColor = colorChoice ? colorChoice.color : "#1ed760";
+
+  const fonts = el("div", { className: "clock-fonts" });
+  fontSpec.choices.forEach((choice) => {
+    const chip = el("button", { type: "button", className: "chip", textContent: choice.label });
+    chip.dataset.font = choice.value;
+    chip.setAttribute("aria-pressed", String(choice.value === settings[fontSpec.key]));
+    chip.addEventListener("click", () => sendSetting(scene, fontSpec.key, choice.value, true));
+    fonts.appendChild(chip);
+  });
+
+  const styles = el("div", { className: "clock-styles" });
+  styleSpec.choices.forEach((choice) => {
+    const face = el("span", { className: "clock-face" });
+    face.style.setProperty("--led", ledColor);
+    face.style.setProperty("--img", `url("/static/icons/clock/${choice.value}-${settings[fontSpec.key]}.png")`);
+    const button = el("button", { type: "button", className: "clock-style", title: choice.label }, [face]);
+    button.setAttribute("aria-label", choice.label);
+    button.setAttribute("aria-pressed", String(choice.value === settings[styleSpec.key]));
+    button.addEventListener("click", () => sendSetting(scene, styleSpec.key, choice.value, true));
+    styles.appendChild(button);
+  });
+
+  return el("div", { className: "control clock-picker" }, [fonts, styles]);
+}
+
+/**
  * @brief Indica si un ajuste debe mostrarse con los valores actuales.
  *
  * Un ajuste puede declarar "show_if" en su esquema, por ejemplo {"style": ["analog"]}, y entonces solo
@@ -218,15 +296,21 @@ function activeScene() {
   return state && state.scenes.find((scene) => scene.name === state.scene);
 }
 
-/** @brief Dibuja los botones de selección de modo. */
+/** @brief Dibuja los botones de selección de modo (con icono si lo tiene; si no, con texto). */
 function renderScenes() {
   const container = $("scenes");
   container.replaceChildren();
   state.scenes.forEach((scene) => {
-    const chip = el("button", { type: "button", className: "chip", textContent: scene.label });
-    chip.setAttribute("aria-pressed", String(scene.name === state.scene));
-    chip.addEventListener("click", () => selectScene(scene.name));
-    container.appendChild(chip);
+    const icon = sceneIcon(scene);
+    const button = icon
+      ? el("button", { type: "button", className: "mode", title: scene.label }, [
+        el("img", { src: `/static/icons/${icon}.png`, alt: "" }),
+      ])
+      : el("button", { type: "button", className: "chip", textContent: scene.label });
+    button.setAttribute("aria-label", scene.label);
+    button.setAttribute("aria-pressed", String(scene.name === state.scene));
+    button.addEventListener("click", () => selectScene(scene.name));
+    container.appendChild(button);
   });
 }
 
@@ -263,8 +347,18 @@ function renderSettings() {
   card.hidden = false;
   $("settings-title").textContent = `Ajustes · ${scene.label}`;
 
+  // El reloj tiene una disposición propia para el estilo y la tipografía.
+  const styleSpec = scene.schema.find((spec) => spec.key === "style");
+  const fontSpec = scene.schema.find((spec) => spec.key === "font");
+  const clockPicker = sceneIcon(scene) === "reloj" && styleSpec && fontSpec;
+
   scene.schema.forEach((spec) => {
     if (!isVisible(spec, scene.settings)) return;
+    if (clockPicker && spec === fontSpec) return;
+    if (clockPicker && spec === styleSpec) {
+      container.appendChild(buildClockPicker(scene, styleSpec, fontSpec));
+      return;
+    }
     const value = scene.settings[spec.key];
     const label = spec.label || spec.key;
     if (spec.type === "color") {
@@ -276,16 +370,18 @@ function renderSettings() {
       }));
     } else if (spec.type === "choice") {
       container.appendChild(buildChoice({
-        label,
+        label: HIDDEN_LABELS.some((pattern) => pattern.test(label)) ? "" : label,
         choices: spec.choices,
         value,
         onChange: (next) => sendSetting(scene, spec.key, next, true),
       }));
     } else if (spec.type === "float" || spec.type === "int") {
       const range = spec.max - spec.min;
+      const isSpeed = /velocidad|speed|rpm/i.test(`${spec.key} ${label}`);
       const step = spec.type === "int" ? 1 : (range >= 20 ? 1 : 0.1);
       container.appendChild(buildSlider({
-        label,
+        label: label.replace(/\s*\(rpm\)/i, ""),
+        variant: isSpeed ? "speed" : undefined,
         min: spec.min,
         max: spec.max,
         step,
@@ -299,7 +395,9 @@ function renderSettings() {
 /** @brief Dibuja el deslizador de brillo. */
 function renderBrightness() {
   $("brightness").replaceChildren(buildSlider({
-    label: "Brillo de la matriz",
+    label: "",
+    variant: "brightness",
+    showValue: false,
     min: 0,
     max: 100,
     step: 1,
@@ -315,11 +413,22 @@ function renderBrightness() {
   }));
 }
 
+/** @brief Muestra "Notas" solo en el modo calendario e "Imágenes" solo en el modo pixel art. */
+function renderLinks() {
+  const scene = activeScene();
+  const icon = scene ? sceneIcon(scene) : null;
+  const notes = $("notes-card");
+  const images = $("images-card");
+  if (notes) notes.hidden = icon !== "calendario";
+  if (images) images.hidden = icon !== "pixelart";
+}
+
 /** @brief Dibuja toda la interfaz a partir del estado actual. */
 function renderAll() {
   renderScenes();
   renderSettings();
   renderBrightness();
+  renderLinks();
 }
 
 /**
@@ -398,4 +507,4 @@ function start() {
   });
 }
 
-start();
+start()

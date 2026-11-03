@@ -323,9 +323,9 @@ def _build_color_vinyl(size: int, dominant: Color) -> _Layers:
 ## Diseños disponibles: identificador -> (nombre visible, función que construye sus capas).
 STYLES: dict[str, tuple[str, Callable[[int, Color], _Layers]]] = {
     "vinyl": ("Vinilo clásico", _build_vinyl),
-    "cover": ("Portada + brillo", _build_cover),
+    "cover": ("Brillo", _build_cover),
     "cd": ("CD", _build_cd),
-    "color_vinyl": ("Vinilo de color", _build_color_vinyl),
+    "color_vinyl": ("Vinilo color", _build_color_vinyl),
 }
 
 ## Diseños cuyas capas dependen del color dominante (hay que reconstruirlas al cambiar de canción).
