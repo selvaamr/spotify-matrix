@@ -7,6 +7,8 @@ Además de dibujar, arranca la interfaz web (ver web/server.py) en un hilo apart
 Los ajustes (escena, velocidad, diseño, brillo...) se cambian desde la web y se
 guardan en settings.json, por lo que el comando de arranque no necesita parámetros.
 El tiempo se descarga de Open-Meteo en segundo plano (ver services/weather.py).
+Cuando Spotify empieza a sonar se cambia solo al modo Spotify, y al parar se vuelve al modo
+anterior (ver core/autoswitch.py).
 
 @par Uso
 @code
@@ -27,6 +29,7 @@ except ImportError:
     def load_dotenv() -> None:
         return None
 
+from core.autoswitch import SpotifyAutoSwitch
 from core.controller import Controller
 from core.display import MATRIX_SIZE, MatrixDisplay, MockDisplay
 from core.manager import SceneManager
@@ -220,6 +223,7 @@ def run(args: argparse.Namespace) -> None:
     controller.restore()
     publisher = FramePublisher()
     web = None if (args.no_web or args.once) else start_web(controller, publisher, notes, gallery)
+    auto_switch = SpotifyAutoSwitch(controller, lambda: poller.snapshot()[1]) if poller and not args.once else None
 
     size = MATRIX_SIZE
     last_frame = time.monotonic()
@@ -230,6 +234,8 @@ def run(args: argparse.Namespace) -> None:
             delta = frame_start - last_frame
             last_frame = frame_start
 
+            if auto_switch:
+                auto_switch.tick()
             manager.update(delta)
             frame = manager.render(size)
             publisher.publish(frame)

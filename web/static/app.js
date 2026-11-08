@@ -203,7 +203,7 @@ function buildChoice({ label, choices, value, onChange }) {
 }
 
 /** @brief Etiquetas de ajustes que no se muestran (solo se ven sus botones). */
-const HIDDEN_LABELS = [/dise[ñn]o del disco/i];
+const HIDDEN_LABELS = [/dise[ñn]o del disco/i, /^estilo$/i, /^imagen$/i];
 
 /**
  * @brief Construye un selector de color: una fila de círculos, cada uno con su color (sin texto).
@@ -232,18 +232,27 @@ function buildColor({ label, choices, value, onChange }) {
 }
 
 /**
- * @brief Construye el selector del reloj: tipografías en columna a la izquierda y, a la derecha,
- *        los dos estilos como círculos con una vista previa de cómo se verá la matriz.
+ * @brief Escenas con selector propio de estilo y tipografía: icono de la escena -> carpeta de las
+ *        vistas previas (static/icons/<carpeta>/<estilo>-<tipografía>.png).
  *
- * Las vistas previas son imágenes en blanco (static/icons/clock/<estilo>-<tipografía>.png) que se
- * usan como máscara y se pintan con el color elegido, así siempre coinciden con los ajustes.
+ * Las vistas previas del reloj son imágenes en blanco que se usan como máscara y se pintan con el
+ * color elegido, así siempre coinciden con los ajustes.
+ */
+const STYLE_PICKERS = {
+  reloj: { folder: "clock" },
+};
+
+/**
+ * @brief Construye el selector de estilo y tipografía: tipografías en columna a la izquierda y, a la
+ *        derecha, los estilos como círculos con una vista previa de cómo se verá la matriz.
  *
- * @param {Object} scene Escena del reloj.
+ * @param {Object} scene Escena (reloj o calendario).
  * @param {Object} styleSpec Ajuste "style" del esquema.
  * @param {Object} fontSpec Ajuste "font" del esquema.
+ * @param {{folder: string}} picker Carpeta de las vistas previas.
  * @return {HTMLElement} Contenedor del control.
  */
-function buildClockPicker(scene, styleSpec, fontSpec) {
+function buildStylePicker(scene, styleSpec, fontSpec, picker) {
   const settings = scene.settings;
   const colorSpec = scene.schema.find((spec) => spec.type === "color");
   const colorChoice = colorSpec && colorSpec.choices.find((choice) => choice.value === settings[colorSpec.key]);
@@ -262,7 +271,7 @@ function buildClockPicker(scene, styleSpec, fontSpec) {
   styleSpec.choices.forEach((choice) => {
     const face = el("span", { className: "clock-face" });
     face.style.setProperty("--led", ledColor);
-    face.style.setProperty("--img", `url("/static/icons/clock/${choice.value}-${settings[fontSpec.key]}.png")`);
+    face.style.setProperty("--img", `url("/static/icons/${picker.folder}/${choice.value}-${settings[fontSpec.key]}.png")`);
     const button = el("button", { type: "button", className: "clock-style", title: choice.label }, [face]);
     button.setAttribute("aria-label", choice.label);
     button.setAttribute("aria-pressed", String(choice.value === settings[styleSpec.key]));
@@ -271,6 +280,162 @@ function buildClockPicker(scene, styleSpec, fontSpec) {
   });
 
   return el("div", { className: "control clock-picker" }, [fonts, styles]);
+}
+
+/** @brief Estado del calendario de los ajustes (se conserva entre redibujados). */
+const cal = {
+  /** Primer día del mes que se ve. */
+  month: null,
+  /** Día que muestra la matriz (YYYY-MM-DD), o "" si sigue siempre el de hoy. */
+  viewDay: "",
+  /** Notas por id (para saber su color). */
+  notes: {},
+  /** Colores disponibles: clave -> #rrggbb. */
+  colors: {},
+  /** Qué notas caen cada día visible: YYYY-MM-DD -> [ids]. */
+  days: {},
+};
+
+/** @brief Fecha local en formato YYYY-MM-DD. */
+function isoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** @brief Convierte YYYY-MM-DD en fecha local. */
+function parseIsoDate(value) {
+  const [y, m, d] = value.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+/** @brief Día que muestra la matriz ahora mismo (el elegido o, si no hay, hoy). */
+function calShownDay() {
+  return cal.viewDay || isoDate(new Date());
+}
+
+/** @brief Primer lunes visible y número de casillas del mes que se ve en el calendario. */
+function calGrid() {
+  const first = cal.month;
+  const lead = (first.getDay() + 6) % 7;
+  const start = new Date(first.getFullYear(), first.getMonth(), 1 - lead);
+  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  const cells = Math.ceil((lead + last) / 7) * 7;
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + cells - 1);
+  return { start, end, cells };
+}
+
+/**
+ * @brief Descarga las notas, el día elegido y qué notas caen en cada día del mes visible, y redibuja el calendario.
+ * @param {boolean} withNotes Si es false solo se piden los días del mes (al cambiar de mes).
+ * @return {Promise<void>}
+ */
+async function loadCalendar(withNotes = true) {
+  try {
+    if (withNotes) {
+      const data = await api("/api/notes");
+      cal.notes = Object.fromEntries(data.notes.map((note) => [note.id, note]));
+      cal.colors = Object.fromEntries((data.colors || []).map((c) => [c.value, c.color]));
+      cal.viewDay = data.view_day || "";
+      if (!cal.month) {
+        const shown = parseIsoDate(calShownDay());
+        cal.month = new Date(shown.getFullYear(), shown.getMonth(), 1);
+      }
+    }
+    const { start, end } = calGrid();
+    cal.days = (await api(`/api/notes-days?start=${isoDate(start)}&end=${isoDate(end)}`)).days || {};
+    renderCalendar();
+  } catch (error) {
+    toast(`No se pudo cargar el calendario: ${error.message}`);
+  }
+}
+
+/**
+ * @brief Elige el día que muestra la matriz. Elegir hoy hace que siga siempre el día actual.
+ * @param {string} key Día (YYYY-MM-DD).
+ * @return {Promise<void>}
+ */
+async function chooseCalendarDay(key) {
+  const value = key === isoDate(new Date()) ? "" : key;
+  try {
+    const result = await api("/api/notes-view-day", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ day: value }),
+    });
+    cal.viewDay = result.view_day || "";
+    const d = parseIsoDate(key);
+    if (d.getMonth() !== cal.month.getMonth() || d.getFullYear() !== cal.month.getFullYear()) {
+      cal.month = new Date(d.getFullYear(), d.getMonth(), 1);
+      await loadCalendar(false);
+    } else {
+      renderCalendar();
+    }
+  } catch (error) {
+    toast(`No se pudo elegir el día: ${error.message}`);
+  }
+}
+
+/** @brief Dibuja el mes en el hueco del calendario de los ajustes (si está en pantalla). */
+function renderCalendar() {
+  const box = $("cal-box");
+  if (!box || !cal.month) return;
+  const shown = calShownDay();
+  const today = isoDate(new Date());
+  const title = cal.month.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
+
+  const prev = el("button", { type: "button", className: "chip cal-nav", textContent: "‹" });
+  prev.setAttribute("aria-label", "Mes anterior");
+  prev.addEventListener("click", () => { cal.month = new Date(cal.month.getFullYear(), cal.month.getMonth() - 1, 1); loadCalendar(false); });
+  const next = el("button", { type: "button", className: "chip cal-nav", textContent: "›" });
+  next.setAttribute("aria-label", "Mes siguiente");
+  next.addEventListener("click", () => { cal.month = new Date(cal.month.getFullYear(), cal.month.getMonth() + 1, 1); loadCalendar(false); });
+  const head = el("div", { className: "cal-head" }, [
+    prev, el("span", { className: "cal-title", textContent: title.charAt(0).toUpperCase() + title.slice(1) }), next,
+  ]);
+
+  const weekdays = el("div", { className: "cal-weekdays" },
+    ["L", "M", "X", "J", "V", "S", "D"].map((letter) => el("span", { textContent: letter })));
+
+  const grid = el("div", { className: "cal-days" });
+  const { start, cells } = calGrid();
+  for (let index = 0; index < cells; index++) {
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + index);
+    const key = isoDate(d);
+    const ids = cal.days[key] || [];
+    const dots = el("span", { className: "cal-dots" }, ids.slice(0, 4).map((id) => {
+      const dot = el("i");
+      dot.style.backgroundColor = cal.colors[(cal.notes[id] || {}).color] || "#1ed760";
+      return dot;
+    }));
+    const button = el("button", { type: "button", className: "cal-day" }, [el("span", { textContent: String(d.getDate()) }), dots]);
+    if (d.getMonth() !== cal.month.getMonth()) button.classList.add("other");
+    if (key === today) button.classList.add("today");
+    button.setAttribute("aria-pressed", String(key === shown));
+    button.setAttribute("aria-label", `${d.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}: ${ids.length} notas`);
+    button.addEventListener("click", () => chooseCalendarDay(key));
+    grid.appendChild(button);
+  }
+
+  const shownText = parseIsoDate(shown).toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" });
+  const footer = el("div", { className: "cal-footer" }, [
+    el("span", { textContent: cal.viewDay ? `En la matriz: ${shownText}` : `En la matriz: hoy (${shownText})` }),
+  ]);
+  if (cal.viewDay) {
+    const back = el("button", { type: "button", className: "cal-today", textContent: "Volver a hoy" });
+    back.addEventListener("click", () => chooseCalendarDay(today));
+    footer.appendChild(back);
+  }
+
+  box.replaceChildren(head, weekdays, grid, footer);
+}
+
+/**
+ * @brief Ajustes del calendario: el calendario del mes, donde se elige el día que muestra la matriz.
+ * @return {HTMLElement} Contenedor del control.
+ */
+function buildCalendarSettings() {
+  const box = el("div", { id: "cal-box", className: "cal" });
+  setTimeout(() => { renderCalendar(); loadCalendar(); }, 0);
+  return el("div", { className: "control" }, [box]);
 }
 
 /**
@@ -347,16 +512,19 @@ function renderSettings() {
   card.hidden = false;
   $("settings-title").textContent = `Ajustes · ${scene.label}`;
 
-  // El reloj tiene una disposición propia para el estilo y la tipografía.
+  // El reloj y el calendario tienen una disposición propia para el estilo y la tipografía.
   const styleSpec = scene.schema.find((spec) => spec.key === "style");
   const fontSpec = scene.schema.find((spec) => spec.key === "font");
-  const clockPicker = sceneIcon(scene) === "reloj" && styleSpec && fontSpec;
+  const picker = styleSpec && fontSpec ? STYLE_PICKERS[sceneIcon(scene)] : undefined;
+
+  // El calendario lleva el mes (para elegir el día que muestra la matriz) antes de sus ajustes.
+  if (sceneIcon(scene) === "calendario") container.appendChild(buildCalendarSettings());
 
   scene.schema.forEach((spec) => {
     if (!isVisible(spec, scene.settings)) return;
-    if (clockPicker && spec === fontSpec) return;
-    if (clockPicker && spec === styleSpec) {
-      container.appendChild(buildClockPicker(scene, styleSpec, fontSpec));
+    if (picker && spec === fontSpec) return;
+    if (picker && spec === styleSpec) {
+      container.appendChild(buildStylePicker(scene, styleSpec, fontSpec, picker));
       return;
     }
     const value = scene.settings[spec.key];

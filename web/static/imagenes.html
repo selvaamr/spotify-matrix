@@ -4,7 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#111115">
-  <title>Imágenes · Matriz LED</title>
+  <title>Imágenes · KATXI MATRIX</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&display=swap">
   <link rel="stylesheet" href="/static/style.css">
   <style>
     .back { color: var(--muted); text-decoration: none; font-size: .9rem; }
@@ -33,7 +36,6 @@
 <body>
   <main>
     <a class="back" href="/">← Volver a la matriz</a>
-    <h1>Imágenes</h1>
 
     <section class="card">
       <h2>Subir imagen</h2>
@@ -54,7 +56,7 @@
     </section>
 
     <section class="card">
-      <h2 id="count-title">Galería</h2>
+      <h2 id="count-title">Galeria</h2>
       <ul id="list"></ul>
     </section>
   </main>
@@ -121,7 +123,7 @@
 
     async function load() {
       const data = await api("GET", "/api/pixelart");
-      $("count-title").textContent = "Galería · " + data.images.length + " de " + data.max;
+      $("count-title").textContent = "Galeria · " + data.images.length + " de " + data.max;
       const list = $("list");
       list.replaceChildren();
       if (!data.images.length) {

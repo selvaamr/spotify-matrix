@@ -4,7 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#111115">
-  <title>Notas · Matriz LED</title>
+  <title>Notas · KATXI MATRIX</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&display=swap">
   <link rel="stylesheet" href="/static/style.css">
   <style>
     .back { color: var(--muted); text-decoration: none; font-size: .9rem; }
@@ -21,18 +24,35 @@
     button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; cursor: pointer; }
     button.ghost { width: auto; background: transparent; cursor: pointer; }
     ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-    li { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; }
+    li {
+      --note: #1ed760;
+      border: 1px solid var(--line); border-left: 4px solid var(--note); border-radius: 12px; padding: 12px;
+      display: grid; gap: 8px; background: linear-gradient(90deg, color-mix(in srgb, var(--note) 10%, transparent), transparent 60%);
+    }
+    li .text { color: var(--note); font-weight: 600; }
+    li .when b { color: var(--note); font-weight: 600; }
+    li .tag { border-color: color-mix(in srgb, var(--note) 50%, var(--line)); color: var(--note); }
     .when { font-size: .8rem; color: var(--muted); }
     .text { word-break: break-word; }
     .buttons { display: flex; gap: 8px; }
     .buttons button { width: auto; min-height: 40px; padding: 8px 14px; cursor: pointer; }
     .empty { color: var(--muted); }
+    .field-title { font-size: .85rem; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+    .field-title strong { color: var(--text); font-weight: 600; }
+    .text { display: flex; gap: 10px; align-items: center; }
+    .note-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; box-shadow: 0 0 6px currentColor; }
+    .tag { font-size: .75rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; margin-left: auto; white-space: nowrap; }
+    .legend { display: grid; gap: 10px; }
+    .legend-row { display: grid; grid-template-columns: 28px 1fr; gap: 12px; align-items: center; }
+    .legend-row .note-dot { width: 22px; height: 22px; }
+    .legend-actions { display: flex; justify-content: flex-end; }
+    .legend-actions button { width: auto; }
+    .swatches .swatch { min-height: 0; }
   </style>
 </head>
 <body>
   <main>
     <a class="back" href="/">← Volver a la matriz</a>
-    <h1>Notas</h1>
 
     <section class="card">
       <h2 id="form-title">Nueva nota</h2>
@@ -45,14 +65,25 @@
           <label>Fecha <input id="date" type="date" required></label>
           <label>Hora (opcional) <input id="time" type="time"></label>
         </div>
-        <label>Repetir
-          <select id="repeat"></select>
-        </label>
+        <select id="repeat" aria-label="Repetición"></select>
+        <div>
+          <div class="field-title">Color <strong id="color-meaning"></strong></div>
+          <div id="colors" class="swatches"></div>
+        </div>
         <div class="actions">
           <button class="primary" type="submit" id="save">Añadir</button>
           <button class="ghost" type="button" id="cancel" hidden>Cancelar</button>
         </div>
       </form>
+    </section>
+
+    <section class="card">
+      <h2>Leyenda</h2>
+      <p class="hint" style="margin-top:0">Escribe qué significa cada color. Los que dejes vacíos no salen en la leyenda.</p>
+      <div id="legend" class="legend"></div>
+      <div class="legend-actions" style="margin-top:12px">
+        <button class="primary" type="button" id="save-legend">Guardar leyenda</button>
+      </div>
     </section>
 
     <section class="card">
@@ -67,6 +98,58 @@
     const $ = (id) => document.getElementById(id);
     let editing = null;
     let repeatLabels = {};
+    let colors = [];
+    let legend = {};
+    let defaultColor = "green";
+    let selectedColor = "green";
+
+    /** Color (#rrggbb) de una clave de color. */
+    function colorHex(key) {
+      const found = colors.find((c) => c.value === key);
+      return found ? found.color : "#1ed760";
+    }
+
+    /** Dibuja los círculos de color del formulario y marca el elegido. */
+    function renderColorPicker() {
+      const box = $("colors");
+      box.replaceChildren();
+      for (const c of colors) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "swatch";
+        b.style.backgroundColor = c.color;
+        b.title = legend[c.value] || c.label;
+        b.setAttribute("aria-label", legend[c.value] ? `${c.label}: ${legend[c.value]}` : c.label);
+        b.setAttribute("aria-pressed", String(c.value === selectedColor));
+        b.addEventListener("click", () => { selectedColor = c.value; renderColorPicker(); });
+        box.append(b);
+      }
+      $("color-meaning").textContent = legend[selectedColor] || "";
+    }
+
+    /** Dibuja el editor de la leyenda: un círculo de cada color con su significado. */
+    function renderLegend() {
+      const box = $("legend");
+      box.replaceChildren();
+      for (const c of colors) {
+        const row = document.createElement("label");
+        row.className = "legend-row";
+        const dot = document.createElement("span");
+        dot.className = "note-dot";
+        dot.style.backgroundColor = c.color;
+        dot.style.color = c.color;
+        const input = document.createElement("input");
+        input.type = "text";
+        input.dataset.color = c.value;
+        input.maxLength = maxLegendLength;
+        input.placeholder = `${c.label} (sin significado)`;
+        input.value = legend[c.value] || "";
+        input.setAttribute("aria-label", `Significado del color ${c.label}`);
+        row.append(dot, input);
+        box.append(row);
+      }
+    }
+    let maxLegendLength = 20;
 
     function toast(message) {
       const el = $("toast");
@@ -105,6 +188,8 @@
       $("form-title").textContent = "Nueva nota";
       $("save").textContent = "Añadir";
       $("cancel").hidden = true;
+      selectedColor = defaultColor;
+      renderColorPicker();
     }
 
     function startEdit(note) {
@@ -113,6 +198,8 @@
       $("date").value = note.date;
       $("time").value = note.time;
       $("repeat").value = note.repeat;
+      selectedColor = note.color || defaultColor;
+      renderColorPicker();
       $("form-title").textContent = "Editar nota";
       $("save").textContent = "Guardar";
       $("cancel").hidden = false;
@@ -131,14 +218,25 @@
       }
       for (const note of notes) {
         const item = document.createElement("li");
+        item.style.setProperty("--note", colorHex(note.color));
         const when = document.createElement("div");
         when.className = "when";
-        const parts = [formatDate(note.date), note.time || "todo el día"];
-        if (note.repeat !== "none") parts.push(repeatLabels[note.repeat] || note.repeat);
-        when.textContent = parts.join(" · ");
+        const hour = document.createElement("b");
+        hour.textContent = note.time || "Todo el día";
+        const rest = [formatDate(note.date)];
+        if (note.repeat !== "none") rest.push(repeatLabels[note.repeat] || note.repeat);
+        when.append(hour, " · " + rest.join(" · "));
         const text = document.createElement("div");
         text.className = "text";
-        text.textContent = note.text;
+        const label = document.createElement("span");
+        label.textContent = note.text;
+        text.append(label);
+        if (legend[note.color]) {
+          const tag = document.createElement("span");
+          tag.className = "tag";
+          tag.textContent = legend[note.color];
+          text.append(tag);
+        }
         const buttons = document.createElement("div");
         buttons.className = "buttons";
         const edit = document.createElement("button");
@@ -162,6 +260,14 @@
     async function load() {
       const data = await api("GET", "/api/notes");
       repeatLabels = Object.fromEntries(data.repeats.map((r) => [r.value, r.label]));
+      const firstLoad = !colors.length;
+      colors = data.colors || [];
+      legend = data.legend || {};
+      defaultColor = data.default_color || "green";
+      maxLegendLength = data.max_legend_length || 20;
+      if (firstLoad) selectedColor = defaultColor;
+      renderColorPicker();
+      renderLegend();
       if (!$("repeat").options.length) {
         for (const r of data.repeats) $("repeat").add(new Option(r.label, r.value));
         $("text").maxLength = data.max_length;
@@ -171,7 +277,7 @@
 
     $("form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const body = { text: $("text").value, date: $("date").value, time: $("time").value, repeat: $("repeat").value };
+      const body = { text: $("text").value, date: $("date").value, time: $("time").value, repeat: $("repeat").value, color: selectedColor };
       try {
         if (editing) await api("PUT", "/api/notes/" + editing, body);
         else await api("POST", "/api/notes", body);
@@ -180,6 +286,16 @@
       } catch (error) { toast(error.message); }
     });
     $("cancel").addEventListener("click", resetForm);
+    $("save-legend").addEventListener("click", async () => {
+      const values = {};
+      for (const input of $("legend").querySelectorAll("input")) values[input.dataset.color] = input.value;
+      try {
+        await api("PUT", "/api/notes-legend", { legend: values });
+        await load();
+        $("save-legend").textContent = "Guardada ✓";
+        setTimeout(() => { $("save-legend").textContent = "Guardar leyenda"; }, 2000);
+      } catch (error) { toast(error.message); }
+    });
 
     resetForm();
     load().catch((error) => toast(error.message));

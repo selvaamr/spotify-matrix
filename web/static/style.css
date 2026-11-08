@@ -121,6 +121,35 @@ h2 {
   -webkit-mask: var(--img) center / contain no-repeat;
   mask: var(--img) center / contain no-repeat;
 }
+/* Ajustes del calendario: el calendario del mes para elegir el día que muestra la matriz. */
+.cal-head { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 8px; margin-bottom: 10px; }
+.cal-title { text-align: center; font-weight: 600; }
+.cal-nav { min-height: 40px; padding: 0; font-size: 1.2rem; }
+.cal-weekdays, .cal-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-weekdays span { text-align: center; font-size: .75rem; color: var(--muted); padding-bottom: 4px; }
+.cal-days { padding-bottom: 4px; }
+.cal-day {
+  --edge: #0b0b0f;
+  appearance: none; aspect-ratio: 1; padding: 4px 0 0; border-radius: 10px; cursor: pointer; color: var(--text); font: inherit;
+  display: grid; grid-template-rows: 1fr auto; justify-items: center; align-items: center;
+  border: 1px solid #3a3a48; background: linear-gradient(180deg, #2c2c37, #202029);
+  box-shadow: 0 3px 0 var(--edge), 0 4px 6px rgba(0, 0, 0, .4), inset 0 1px 0 rgba(255, 255, 255, .08);
+  transition: transform .08s, box-shadow .08s; font-variant-numeric: tabular-nums;
+}
+.cal-day:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--edge), inset 0 1px 0 rgba(255, 255, 255, .06); }
+.cal-day.other { opacity: .35; }
+.cal-day.today { border-color: #5dff7a; }
+.cal-day[aria-pressed="true"] {
+  --edge: #0b5226;
+  background: linear-gradient(180deg, #2bd466, #1aa84b); border-color: #4be07f; color: var(--accent-text); font-weight: 600;
+  transform: translateY(2px); box-shadow: 0 1px 0 var(--edge), inset 0 1px 0 rgba(255, 255, 255, .25);
+}
+.cal-dots { display: flex; gap: 2px; height: 8px; align-items: center; padding-bottom: 4px; }
+.cal-dots i { width: 5px; height: 5px; border-radius: 50%; display: block; }
+.cal-day[aria-pressed="true"] .cal-dots i { box-shadow: 0 0 0 1px rgba(0, 0, 0, .35); }
+.cal-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; font-size: .85rem; color: var(--muted); }
+.cal-footer span::first-letter { text-transform: uppercase; }
+.cal-today { appearance: none; border: 0; background: none; color: #5dff7a; text-decoration: underline; cursor: pointer; font: inherit; padding: 4px 0; white-space: nowrap; }
 .clock-style:not([aria-pressed="true"]) .clock-face::after { opacity: .5; }
 .clock-style[aria-pressed="true"] {
   --edge: #0b5226;

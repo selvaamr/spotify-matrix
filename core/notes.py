@@ -2,9 +2,12 @@
 @file notes.py
 @brief Notas y recordatorios del calendario, guardados en un archivo JSON (notes.json).
 
-Cada nota tiene un texto, una fecha, una hora opcional y una repetición (nunca, cada día, cada
-semana, cada mes o cada año). La escena de calendario en estilo "3 días" pregunta aquí qué notas
-caen en cada día, y la web las crea, edita y borra a través de web/notes_api.py.
+Cada nota tiene un texto, una fecha, una hora opcional, una repetición (nunca, cada día, cada
+semana, cada mes o cada año) y un color. La escena de calendario pregunta aquí qué notas caen en
+cada día, y la web las crea, edita y borra a través de web/notes_api.py.
+
+Además se guarda una leyenda: qué significa cada color (por ejemplo, verde = "Trabajo"), y el día
+que muestra la matriz en la escena de calendario (vacío = hoy, que cambia solo a medianoche).
 
 El guardado es atómico (archivo temporal + reemplazo) para que un corte de luz no deje el JSON a
 medias, y el almacén es seguro entre hilos (servidor web y bucle principal).
@@ -20,6 +23,8 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 
+from scenes.pixeltext import COLORS
+
 ## Repeticiones permitidas: identificador -> texto para la interfaz.
 REPEATS = {
     "none": "No se repite",
@@ -31,6 +36,15 @@ REPEATS = {
 
 ## Longitud máxima del texto de una nota.
 MAX_TEXT_LENGTH = 60
+
+## Colores que puede tener una nota (los mismos que el resto de escenas, ver scenes/pixeltext.py).
+NOTE_COLORS = COLORS
+
+## Color de las notas que no indican ninguno (las creadas antes de que existieran los colores).
+DEFAULT_NOTE_COLOR = "green"
+
+## Longitud máxima del significado de un color en la leyenda.
+MAX_LEGEND_LENGTH = 20
 
 
 @dataclass(frozen=True)
@@ -49,6 +63,8 @@ class Note:
     time: str
     ## Repetición: "none", "daily", "weekly", "monthly" o "yearly".
     repeat: str
+    ## Color del punto de la nota (clave de NOTE_COLORS).
+    color: str = DEFAULT_NOTE_COLOR
 
     def occurs_on(self, day: date) -> bool:
         """
@@ -76,14 +92,15 @@ class Note:
         return day == start
 
 
-def validate(text: str, day: str, time: str, repeat: str) -> tuple[str, str, str, str]:
+def validate(text: str, day: str, time: str, repeat: str, color: str = DEFAULT_NOTE_COLOR) -> tuple[str, str, str, str, str]:
     """
     @brief Comprueba y normaliza los campos de una nota.
     @param text   Texto de la nota.
     @param day    Fecha en formato YYYY-MM-DD.
     @param time   Hora en formato HH:MM, o cadena vacía.
     @param repeat Repetición.
-    @return Tupla (texto, fecha, hora, repetición) ya normalizada.
+    @param color  Color (clave de NOTE_COLORS).
+    @return Tupla (texto, fecha, hora, repetición, color) ya normalizada.
     @throws ValueError con un mensaje en español si algún campo no es válido.
     """
     text = " ".join(str(text).split())
@@ -103,7 +120,48 @@ def validate(text: str, day: str, time: str, repeat: str) -> tuple[str, str, str
         time = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
     if repeat not in REPEATS:
         raise ValueError("La repetición no es válida.")
-    return text, day, time, repeat
+    color = str(color or DEFAULT_NOTE_COLOR)
+    if color not in NOTE_COLORS:
+        raise ValueError("El color no es válido.")
+    return text, day, time, repeat, color
+
+
+def _validate_day(day: str) -> str:
+    """
+    @brief Comprueba el día elegido para la matriz.
+    @param day Fecha YYYY-MM-DD o cadena vacía.
+    @return La fecha normalizada, o cadena vacía.
+    @throws ValueError si no es una fecha válida.
+    """
+    day = str(day or "").strip()
+    if not day:
+        return ""
+    try:
+        return date.fromisoformat(day).isoformat()
+    except ValueError:
+        raise ValueError("La fecha no es válida.") from None
+
+
+def validate_legend(legend: dict) -> dict[str, str]:
+    """
+    @brief Comprueba y normaliza la leyenda de colores.
+    @param legend Color -> significado. Los significados vacíos se quitan.
+    @return Leyenda limpia, en el orden de NOTE_COLORS.
+    @throws ValueError si hay un color desconocido o un significado demasiado largo.
+    """
+    if not isinstance(legend, dict):
+        raise ValueError("La leyenda no es válida.")
+    clean = {}
+    for key in NOTE_COLORS:
+        meaning = " ".join(str(legend.get(key) or "").split())
+        if len(meaning) > MAX_LEGEND_LENGTH:
+            raise ValueError(f"El significado es demasiado largo (máximo {MAX_LEGEND_LENGTH} caracteres).")
+        if meaning:
+            clean[key] = meaning
+    unknown = set(legend) - set(NOTE_COLORS)
+    if unknown:
+        raise ValueError("Hay colores que no existen en la leyenda.")
+    return clean
 
 
 class NotesStore:
@@ -122,6 +180,10 @@ class NotesStore:
         self._lock = threading.RLock()
         ## Notas en memoria, por identificador.
         self._notes: dict[str, Note] = {}
+        ## Leyenda: color -> significado.
+        self._legend: dict[str, str] = {}
+        ## Día que muestra la matriz (YYYY-MM-DD), o cadena vacía para mostrar siempre el de hoy.
+        self._view_day = ""
         ## Contador que sube con cada cambio; las escenas lo usan para saber cuándo volver a dibujar.
         self.version = 0
         self.load()
@@ -134,6 +196,8 @@ class NotesStore:
         """
         with self._lock:
             self._notes = {}
+            self._legend = {}
+            self._view_day = ""
             if not self.path.exists():
                 return
             try:
@@ -152,11 +216,24 @@ class NotesStore:
                 return
             for item in items:
                 try:
-                    text, day, time, repeat = validate(item["text"], item["date"], item.get("time", ""), item.get("repeat", "none"))
+                    color = item.get("color") if item.get("color") in NOTE_COLORS else DEFAULT_NOTE_COLOR
+                    text, day, time, repeat, color = validate(
+                        item["text"], item["date"], item.get("time", ""), item.get("repeat", "none"), color,
+                    )
                     note_id = str(item.get("id") or uuid.uuid4().hex[:8])
-                    self._notes[note_id] = Note(note_id, text, day, time, repeat)
+                    self._notes[note_id] = Note(note_id, text, day, time, repeat, color)
                 except (KeyError, TypeError, ValueError, AttributeError):
                     continue
+            if isinstance(raw, dict) and isinstance(raw.get("legend"), dict):
+                try:
+                    self._legend = validate_legend({k: v for k, v in raw["legend"].items() if k in NOTE_COLORS})
+                except ValueError:
+                    self._legend = {}
+            if isinstance(raw, dict):
+                try:
+                    self._view_day = _validate_day(raw.get("view_day", ""))
+                except ValueError:
+                    self._view_day = ""
             self.version += 1
 
     def all(self) -> list[Note]:
@@ -177,24 +254,70 @@ class NotesStore:
             found = [note for note in self._notes.values() if note.occurs_on(day)]
         return sorted(found, key=lambda note: (note.time != "", note.time, note.text))
 
-    def add(self, text: str, day: str, time: str = "", repeat: str = "none") -> Note:
+    def view_day(self) -> str:
+        """
+        @brief Día que muestra la matriz.
+        @return Fecha YYYY-MM-DD, o cadena vacía si se muestra siempre el día de hoy.
+        """
+        with self._lock:
+            return self._view_day
+
+    def set_view_day(self, day: str) -> str:
+        """
+        @brief Elige el día que muestra la matriz y lo guarda.
+        @param day Fecha YYYY-MM-DD, o cadena vacía para seguir siempre el día de hoy.
+        @return El valor guardado.
+        @throws ValueError si la fecha no es válida.
+        """
+        day = _validate_day(day)
+        with self._lock:
+            if day != self._view_day:
+                self._view_day = day
+                self._changed()
+        return day
+
+    def legend(self) -> dict[str, str]:
+        """
+        @brief Leyenda de colores.
+        @return Color -> significado (copia; solo los colores con significado).
+        """
+        with self._lock:
+            return dict(self._legend)
+
+    def set_legend(self, legend: dict) -> dict[str, str]:
+        """
+        @brief Cambia la leyenda de colores y la guarda.
+        @param legend Color -> significado (vacío para quitarlo).
+        @return Leyenda ya normalizada.
+        @throws ValueError si no es válida.
+        """
+        clean = validate_legend(legend)
+        with self._lock:
+            self._legend = clean
+            self._changed()
+        return dict(clean)
+
+    def add(self, text: str, day: str, time: str = "", repeat: str = "none", color: str = DEFAULT_NOTE_COLOR) -> Note:
         """
         @brief Crea una nota y la guarda.
         @param text   Texto de la nota.
         @param day    Fecha (YYYY-MM-DD).
         @param time   Hora (HH:MM) o vacío.
         @param repeat Repetición.
+        @param color  Color del punto (clave de NOTE_COLORS).
         @return La nota creada.
         @throws ValueError si algún campo no es válido.
         """
-        text, day, time, repeat = validate(text, day, time, repeat)
-        note = Note(uuid.uuid4().hex[:8], text, day, time, repeat)
+        text, day, time, repeat, color = validate(text, day, time, repeat, color)
+        note = Note(uuid.uuid4().hex[:8], text, day, time, repeat, color)
         with self._lock:
             self._notes[note.id] = note
             self._changed()
         return note
 
-    def update(self, note_id: str, text: str, day: str, time: str = "", repeat: str = "none") -> Note:
+    def update(
+        self, note_id: str, text: str, day: str, time: str = "", repeat: str = "none", color: str = DEFAULT_NOTE_COLOR,
+    ) -> Note:
         """
         @brief Modifica una nota y la guarda.
         @param note_id Identificador de la nota.
@@ -202,15 +325,16 @@ class NotesStore:
         @param day     Fecha nueva.
         @param time    Hora nueva o vacío.
         @param repeat  Repetición nueva.
+        @param color   Color nuevo.
         @return La nota modificada.
         @throws KeyError si la nota no existe.
         @throws ValueError si algún campo no es válido.
         """
-        text, day, time, repeat = validate(text, day, time, repeat)
+        text, day, time, repeat, color = validate(text, day, time, repeat, color)
         with self._lock:
             if note_id not in self._notes:
                 raise KeyError(note_id)
-            note = Note(note_id, text, day, time, repeat)
+            note = Note(note_id, text, day, time, repeat, color)
             self._notes[note_id] = note
             self._changed()
         return note
@@ -242,7 +366,7 @@ class NotesStore:
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 with tmp.open("w", encoding="utf-8") as file:
-                    json.dump({"notes": [asdict(note) for note in self.all()]}, file, indent=2, ensure_ascii=False)
+                    json.dump({"notes": [asdict(note) for note in self.all()], "legend": self._legend, "view_day": self._view_day}, file, indent=2, ensure_ascii=False)
                     file.flush()
                     os.fsync(file.fileno())
                 self._match_owner(tmp)

@@ -422,19 +422,72 @@ def render_record(art: Image.Image | None, angle: float, size: int, style: str =
     return RecordRenderer().render(art, angle, size, style)
 
 
+## Letras de la fuente Pixelya (la del título "KATXI MATRIX" de la web) que hacen falta para el
+## mensaje de espera: carácter -> 7 filas separadas por "/" ("#" encendido, "." apagado).
+_IDLE_GLYPHS = {
+    "P": ".####./##..##/##..##/#####./##..../##..../.#....",
+    "L": ".#.../##.../##.../##.../##.../##.../.####",
+    "A": "..##../.####./##..##/##..##/######/##..##/.#..#.",
+    "Y": "#....#/##..##/##..##/.####./..##../..##../..##..",
+    "S": ".####./##..##/##..../.####./....##/##..##/.####.",
+    "O": ".####./##..##/##..##/##..##/##..##/##..##/.####.",
+    "T": "######/#.##.#/..##../..##../..##../..##../..##..",
+    "I": "#./##/##/##/##/##/.#",
+    "F": ".####/##.../##.../####./##.../##.../.#...",
+}
+
+## Líneas del mensaje que se ve cuando no suena nada.
+IDLE_LINES = ("PLAY", "SPOTIFY")
+
+## Color del mensaje de espera: el mismo verde LED que el título de la web.
+IDLE_COLOR: Color = (93, 255, 122)
+
+## Segundos en pausa antes de cambiar el disco por el mensaje "PLAY SPOTIFY".
+IDLE_AFTER = 3.0
+
+
+def _idle_mask() -> Image.Image:
+    """
+    @brief Máscara de 64x64 con el mensaje de espera centrado, en letra Pixelya.
+    @return Imagen "L" (255 donde hay letra).
+    """
+    size = int(REF_SIZE)
+    rows = {char: glyph.split("/") for char, glyph in _IDLE_GLYPHS.items()}
+    line_gap, char_gap, height = 4, 1, 7
+    total = len(IDLE_LINES) * height + (len(IDLE_LINES) - 1) * line_gap
+    mask = Image.new("L", (size, size), 0)
+    pixels = mask.load()
+    y = (size - total) // 2
+    for line in IDLE_LINES:
+        width = sum(len(rows[char][0]) for char in line) + char_gap * (len(line) - 1)
+        x = (size - width) // 2
+        for char in line:
+            for row_index, row in enumerate(rows[char]):
+                for col_index, cell in enumerate(row):
+                    if cell == "#":
+                        pixels[x + col_index, y + row_index] = 255
+            x += len(rows[char][0]) + char_gap
+        y += height + line_gap
+    return mask
+
+
 def render_idle(size: int) -> Image.Image:
     """
-    @brief Dibuja un disco vacío (contorno gris) para cuando no suena nada.
+    @brief Dibuja el mensaje "PLAY SPOTIFY" para cuando no suena nada.
+
+    Va en la letra Pixelya del título de la web, en verde LED y con un halo suave alrededor
+    (como el título). Se dibuja una vez y la escena lo reutiliza.
+
     @param size Lado del fotograma en píxeles.
     @return Fotograma RGB de size x size.
     """
-    frame = Image.new("RGB", (size, size), (0, 0, 0))
-    draw = ImageDraw.Draw(frame)
-    margin = max(2, size // 32)
-    draw.ellipse((margin, margin, size - margin - 1, size - margin - 1), outline=(55, 55, 55), width=2)
-    center = size // 2
-    radius = max(3, size // 18)
-    draw.ellipse((center - radius, center - radius, center + radius, center + radius), fill=(18, 18, 18))
+    mask = _idle_mask()
+    glow = mask.filter(ImageFilter.GaussianBlur(1.6)).point(lambda value: int(value * 0.55))
+    frame = Image.new("RGB", mask.size, (0, 0, 0))
+    frame.paste(_scale_color(IDLE_COLOR, 0.6), (0, 0), glow)
+    frame.paste(IDLE_COLOR, (0, 0), mask)
+    if frame.size != (size, size):
+        frame = frame.resize((size, size), Image.Resampling.NEAREST)
     return frame
 
 
@@ -460,7 +513,7 @@ def demo_album_art(size: int) -> Image.Image:
 # --------------------------------------------------------------------------- #
 class SpotifyRecordScene(Scene):
     """
-    @brief Escena "Disco de Spotify": la carátula gira mientras la música suena.
+    @brief Escena "Disco de Spotify": la carátula gira mientras la música suena; si no suena, "PLAY SPOTIFY".
 
     @par Ajustes
     - rpm: velocidad de giro en revoluciones por minuto (1 a 120).
@@ -501,8 +554,10 @@ class SpotifyRecordScene(Scene):
         self._image: Image.Image | None = None
         ## Renderizador con caché de capas y fotogramas.
         self._renderer = RecordRenderer()
-        ## Disco vacío ya dibujado (tamaño, imagen), para no regenerarlo en cada fotograma.
+        ## Mensaje "PLAY SPOTIFY" ya dibujado (tamaño, imagen), para no regenerarlo en cada fotograma.
         self._idle: tuple[int, Image.Image] | None = None
+        ## Segundos seguidos sin reproducir (al pasar de IDLE_AFTER se muestra "PLAY SPOTIFY").
+        self._paused_for = IDLE_AFTER
 
     def update(self, dt: float) -> None:
         """
@@ -511,15 +566,22 @@ class SpotifyRecordScene(Scene):
         """
         self._image, is_playing = self.poller.snapshot()
         if is_playing and self._image is not None:
+            self._paused_for = 0.0
             self.angle = (self.angle - 360.0 * (self.settings["rpm"] / 60.0) * dt) % 360.0
+        else:
+            self._paused_for += dt
 
     def render(self, size: int) -> Image.Image:
         """
-        @brief Dibuja el disco girando con el diseño elegido, o el disco vacío si no hay carátula.
+        @brief Dibuja el disco girando con el diseño elegido, o "PLAY SPOTIFY" si no suena nada.
+
+        Si la música está en pausa se espera IDLE_AFTER segundos antes de mostrar el mensaje, para
+        que no parpadee al pasar de una canción a otra.
+
         @param size Lado del fotograma en píxeles.
         @return Fotograma RGB.
         """
-        if self._image is None:
+        if self._image is None or self._paused_for >= IDLE_AFTER:
             if self._idle is None or self._idle[0] != size:
                 self._idle = (size, render_idle(size))
             return self._idle[1]

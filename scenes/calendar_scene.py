@@ -1,51 +1,56 @@
 """
 @file calendar_scene.py
-@brief Escena de calendario con dos estilos: el día en grande, o la agenda de 3 días con notas.
+@brief Escena de calendario: la fecha arriba y las notas de ese día ordenadas por hora.
 
-Está pensada para una matriz de 64x64 con una estructura circular delante. El estilo "Día" muestra
-la fecha de hoy a lo grande, y el estilo "3 días" muestra hoy, mañana y pasado con las notas de cada
-día (ver core/notes.py).
+Está pensada para una matriz de 64x64 con una estructura circular delante. Muestra un día: el que se
+elige en el calendario de la web (ver NotesStore.view_day en core/notes.py) o, si no se ha elegido
+ninguno, el de hoy, que cambia solo a medianoche.
+
+Cada nota pinta su hora con el color elegido para ella en la web (las notas de todo el día, que no
+tienen hora, pintan su texto). Si una nota no cabe, su texto se desplaza; si no caben todas las
+notas del día, la lista pasa de página sola.
 
 La imagen solo cambia al cambiar de día, de nota o de posición del texto que se desplaza, así que
 la CPU apenas trabaja cuando no hay nada que animar.
 """
 from __future__ import annotations
 
+import math
 import unicodedata
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Callable
 
 from PIL import Image, ImageDraw
 
 from core.scene import Scene
-from scenes.pixeltext import (
-    COLORS, DAYS, DAYS_FULL, FONT, MONTHS_FULL, Color, dim, draw_centered, draw_text, hex_color, text_width,
-)
+from scenes.pixeltext import COLORS, DAYS, FONT, MONTHS, Color, dim, draw_text, hex_color, text_width
+from scenes.textfonts import TEXT_FONTS, TextFont
 
 if TYPE_CHECKING:
     from core.notes import Note, NotesStore
 
 ## Lado (en píxeles) para el que están pensados todos los diseños.
 REF_SIZE = 64
+## Radio (en píxeles) del círculo visible de la estructura que va delante de la matriz.
+CIRCLE_RADIUS = 30.0
 
-## Filas de la agenda: coordenada Y de la línea del título (la del texto de la nota va 6 píxeles más abajo).
-AGENDA_ROWS = (12, 27, 42)
-## Coordenada X donde empieza el texto de la agenda.
-AGENDA_X = 12
-## Ancho útil de la línea del título (día y hora) de cada fila, para no salirse del círculo.
-AGENDA_TITLE_WIDTH = (42, 48, 46)
-## Ancho útil de la línea de la nota de cada fila.
-AGENDA_TEXT_WIDTH = (46, 48, 42)
-## Máximo de puntos que indican cuántas notas hay en un día.
-AGENDA_MAX_DOTS = 4
-## Segundos que se muestra cada nota cuando cabe entera.
-AGENDA_DWELL = 3.5
+## Segundos que se muestra cada página de notas cuando todo cabe.
+DWELL = 3.5
 ## Segundos de pausa al principio y al final de una nota que se desplaza.
-AGENDA_PAUSE = 1.5
+PAUSE = 1.5
 ## Velocidad del desplazamiento, en píxeles por segundo.
-AGENDA_SPEED = 12.0
+SPEED = 12.0
 ## Color del texto de las notas.
 NOTE_COLOR: Color = (235, 235, 235)
+
+## coordenada Y de la fecha de arriba.
+DAY_HEADER_Y = 8
+## separación vertical entre notas, en píxeles.
+DAY_ROW_GAP = 2
+## última coordenada Y que puede ocupar la lista (más abajo se corta con el círculo).
+DAY_LIST_BOTTOM = 56
+## Píxeles entre la hora y el texto de una nota.
+DAY_GAP = 2
 
 
 def _ascii(text: str) -> str:
@@ -58,13 +63,48 @@ def _ascii(text: str) -> str:
     return " ".join("".join(char if char in FONT else " " for char in plain).split())
 
 
+def _circle_span(top: int, bottom: int) -> tuple[int, int]:
+    """
+    @brief Parte horizontal de una franja de filas que queda dentro del círculo visible.
+    @param top    Primera fila de la franja.
+    @param bottom Última fila de la franja.
+    @return Tupla (primera columna, última columna) que se ven enteras en toda la franja.
+    """
+    center = (REF_SIZE - 1) / 2
+    dy = max(abs(top - center), abs(bottom - center))
+    half = math.sqrt(max(0.0, CIRCLE_RADIUS ** 2 - dy ** 2))
+    return math.ceil(center - half) + 1, math.floor(center + half) - 1
+
+
+def _scroll(overflow: int, local: float) -> int:
+    """
+    @brief Desplazamiento de un texto que no cabe: pausa, avanza hasta el final y se queda ahí.
+    @param overflow Píxeles que sobran.
+    @param local    Segundos desde que empezó a mostrarse.
+    @return Píxeles a desplazar a la izquierda.
+    """
+    if overflow <= 0 or local < PAUSE:
+        return 0
+    return int(min(float(overflow), (local - PAUSE) * SPEED))
+
+
+def _show_time(overflow: int) -> float:
+    """
+    @brief Segundos que debe mostrarse un texto para que dé tiempo a leerlo entero.
+    @param overflow Píxeles que no caben (0 si cabe).
+    @return Segundos.
+    """
+    return DWELL if overflow <= 0 else 2 * PAUSE + overflow / SPEED
+
+
 class CalendarScene(Scene):
     """
     @brief Escena "Calendario".
 
     @par Ajustes
-    - style: "day" (el día de hoy en grande) o "agenda" (hoy, mañana y pasado con sus notas).
-    - color: color de acento (día de hoy, horas).
+    - color: color de acento (fecha y horas).
+
+    El día que se muestra no es un ajuste de la escena: se guarda con las notas (NotesStore.view_day).
     """
 
     ## Identificador de la escena.
@@ -73,15 +113,6 @@ class CalendarScene(Scene):
     label = "Calendario"
     ## Ajustes configurables por el usuario.
     settings_schema = {
-        "style": {
-            "type": "choice",
-            "default": "day",
-            "label": "Estilo",
-            "choices": [
-                {"value": "day", "label": "Día"},
-                {"value": "agenda", "label": "3 días"},
-            ],
-        },
         "color": {
             "type": "color",
             "default": "green",
@@ -99,7 +130,7 @@ class CalendarScene(Scene):
         """
         @brief Crea la escena.
         @param today Función que devuelve la fecha de hoy (se puede sustituir en las pruebas).
-        @param notes Almacén de notas para el estilo "3 días" (None si no se usan notas).
+        @param notes Almacén de notas (None si no se usan notas).
         @param now   Función que devuelve la fecha y hora actuales (se puede sustituir en las pruebas).
         """
         super().__init__()
@@ -113,12 +144,14 @@ class CalendarScene(Scene):
         self._today = today()
         ## Minuto actual (hora y minuto) leído en la última llamada a update().
         self._minute = self._now_fn().strftime("%H:%M")
-        ## Segundos acumulados desde que se activó la escena (mueve el texto de la agenda).
+        ## Segundos acumulados desde que se activó la escena (mueve el texto y pasa las páginas).
         self._t = 0.0
-        ## Clave (día, versión de las notas) de la agenda ya calculada.
-        self._agenda_key: tuple | None = None
-        ## Filas de la agenda: (etiqueta, día, notas) para hoy, mañana y pasado.
-        self._agenda: list[tuple[str, date, list["Note"]]] = []
+        ## Día que se muestra (el elegido en la web, o hoy).
+        self._day = self._today
+        ## Clave (día mostrado, versión de las notas) de las notas ya leídas.
+        self._notes_key: tuple | None = None
+        ## Notas del día mostrado (las de todo el día primero y luego por hora).
+        self._day_notes: list["Note"] = []
         ## Clave del último fotograma dibujado.
         self._cache_key: tuple | None = None
         ## Último fotograma dibujado.
@@ -131,23 +164,22 @@ class CalendarScene(Scene):
 
     def update(self, dt: float) -> None:
         """
-        @brief Lee la fecha y la hora (cambian solas) y, en el estilo "3 días", recalcula las notas si hace falta.
-        @param dt Segundos desde el fotograma anterior (mueve el texto de la agenda).
+        @brief Lee la fecha y la hora, y recalcula las notas si ha cambiado el día o alguna nota.
+        @param dt Segundos desde el fotograma anterior (mueve el texto y pasa las páginas).
         """
         self._today = self._today_fn()
-        if self.settings["style"] != "agenda":
-            return
         self._t += dt
         self._minute = self._now_fn().strftime("%H:%M")
+        chosen = self._notes.view_day() if self._notes is not None else ""
+        day = date.fromisoformat(chosen) if chosen else self._today
         version = self._notes.version if self._notes is not None else 0
-        key = (self._today, version)
-        if key != self._agenda_key:
-            self._agenda_key = key
-            self._agenda = []
-            for offset in range(3):
-                day = self._today + timedelta(days=offset)
-                label = "HOY" if offset == 0 else "MANANA" if offset == 1 else f"{DAYS[day.weekday()]} {day.day}"
-                self._agenda.append((label, day, self._notes.on_day(day) if self._notes is not None else []))
+        key = (day, version)
+        if key != self._notes_key:
+            if day != self._day:
+                self._t = 0.0  # al cambiar de día, la lista empieza por la primera página
+            self._day = day
+            self._notes_key = key
+            self._day_notes = self._notes.on_day(day) if self._notes is not None else []
 
     def render(self, size: int) -> Image.Image:
         """
@@ -155,20 +187,13 @@ class CalendarScene(Scene):
         @param size Lado del fotograma en píxeles (el diseño es de 64 y se escala si es otro).
         @return Fotograma RGB. Es un objeto compartido con la caché: no hay que modificarlo.
         """
-        style = self.settings["style"]
-        states: tuple = ()
-        if style == "agenda":
-            states = self._agenda_states()
-            key = (style, self.settings["color"], self._today, self._minute, self._agenda_key, states, size)
-        else:
-            key = (style, self.settings["color"], self._today, size)
+        font = self._font()
+        state = self._day_state(font)
+        key = (font.key, self.settings["color"], self._today, self._minute, self._notes_key, state, size)
         if key == self._cache_key and self._cache_image is not None:
             return self._cache_image
 
-        if style == "agenda":
-            frame = self._render_agenda(states)
-        else:
-            frame = self._render_day()
+        frame = self._render_day(state, font)
         if size != REF_SIZE:
             frame = frame.resize((size, size), Image.Resampling.NEAREST)
         self._cache_key, self._cache_image = key, frame
@@ -178,96 +203,128 @@ class CalendarScene(Scene):
         """@brief Color de acento elegido por el usuario."""
         return COLORS[self.settings["color"]][1]
 
-    def _render_day(self) -> Image.Image:
+    def _font(self) -> TextFont:
+        """@brief Tipografía del texto: siempre la Pequeña (3x5)."""
+        return TEXT_FONTS["small"]
+
+
+    def _is_past(self, note: "Note", day: date) -> bool:
         """
-        @brief Estilo "Día": nombre del día, el número en grande y el nombre del mes.
+        @brief Indica si una nota de hoy ya ha pasado (tiene hora y esa hora ya ha llegado).
+        @param note Nota.
+        @param day  Día en el que se muestra.
+        @return True si debe verse apagada.
+        """
+        return day == self._today and bool(note.time) and note.time < self._minute
+
+    # ------------------------------------------------------------------ #
+    #  Vista del día
+    # ------------------------------------------------------------------ #
+    def _day_layout(self, font: TextFont) -> list[tuple[int, int, int]]:
+        """
+        @brief Posición de cada fila de la lista del estilo "Día".
+        @param font Tipografía del texto.
+        @return Lista de (Y, primera columna, última columna) de cada fila que cabe.
+        """
+        top = DAY_HEADER_Y + font.height + 4
+        rows = []
+        y = top
+        while y + font.height - 1 <= DAY_LIST_BOTTOM:
+            x0, x1 = _circle_span(y, y + font.height - 1)
+            rows.append((y, x0, x1))
+            y += font.height + DAY_ROW_GAP
+        return rows
+
+    def _day_text_box(self, note: "Note", row: tuple[int, int, int]) -> tuple[int, int]:
+        """
+        @brief Dónde empieza y cuánto mide el hueco para el texto de una nota en su fila.
+        @param note Nota.
+        @param row  Fila (Y, primera columna, última columna).
+        @return Tupla (X donde empieza el texto, ancho disponible).
+        """
+        _, x0, x1 = row
+        x = x0
+        if note.time:
+            x += text_width(note.time, 1) + DAY_GAP
+        return x, max(1, x1 - x + 1)
+
+    def _day_state(self, font: TextFont) -> tuple:
+        """
+        @brief Calcula qué página de notas se ve y cuánto está desplazado el texto de cada fila.
+
+        Cada página se muestra hasta que dé tiempo a leer todas sus notas (las que no caben se
+        desplazan); después se pasa a la siguiente.
+
+        @param font Tipografía del texto.
+        @return Tupla (página, número de páginas, desplazamientos de cada fila).
+        """
+        notes = self._day_notes
+        rows = self._day_layout(font)
+        if not notes or not rows:
+            return (0, 1, ())
+        per_page = len(rows)
+        pages = [notes[start:start + per_page] for start in range(0, len(notes), per_page)]
+        overflows = []
+        for page in pages:
+            page_overflow = []
+            for note, row in zip(page, rows):
+                _, window = self._day_text_box(note, row)
+                page_overflow.append(max(0, font.width(_ascii(note.text)) - window))
+            overflows.append(page_overflow)
+        durations = [max(_show_time(extra) for extra in page) for page in overflows]
+        local = self._t % sum(durations)
+        index = 0
+        while local >= durations[index]:
+            local -= durations[index]
+            index += 1
+        offsets = tuple(_scroll(extra, local) for extra in overflows[index])
+        return (index, len(pages), offsets)
+
+    def _render_day(self, state: tuple, font: TextFont) -> Image.Image:
+        """
+        @brief La fecha arriba y debajo las notas de ese día por horas, con la hora del color de cada nota.
+
+        Las notas de todo el día van primero y sin hora. Las que ya han pasado se ven apagadas. Si
+        hay más notas de las que caben, unos puntitos abajo indican en qué página se está.
+
+        @param state Página y desplazamientos calculados por _day_state().
+        @param font  Tipografía del texto.
         @return Fotograma RGB de 64x64.
         """
-        today, accent = self._today, self._accent()
+        day, accent = self._day, self._accent()
         image = Image.new("RGB", (REF_SIZE, REF_SIZE), (0, 0, 0))
         draw = ImageDraw.Draw(image)
 
-        draw_centered(draw, REF_SIZE / 2, 11, DAYS_FULL[today.weekday()], 1, dim(accent, 0.8))
-        draw_centered(draw, REF_SIZE / 2, 18, str(today.day), 5, accent, spacing=3)
-        draw_centered(draw, REF_SIZE / 2, 48, MONTHS_FULL[today.month - 1], 1, dim(accent, 0.8))
-        return image
+        header = f"{DAYS[day.weekday()]} {day.day} {MONTHS[day.month - 1]}"
+        font.draw(draw, (REF_SIZE - font.width(header)) // 2, DAY_HEADER_Y, header, accent)
+        line_y = DAY_HEADER_Y + font.height + 1
+        draw.line((20, line_y, REF_SIZE - 21, line_y), fill=dim(accent, 0.25))
 
-    def _agenda_states(self) -> tuple:
-        """
-        @brief Calcula qué nota se muestra en cada fila de la agenda y cuánto está desplazado su texto.
+        notes = self._day_notes
+        rows = self._day_layout(font)
+        if not notes:
+            empty = "SIN NOTAS"
+            font.draw(draw, (REF_SIZE - font.width(empty)) // 2, rows[0][0] + 6 if rows else 30, empty, (70, 70, 70))
+            return image
 
-        Cada nota se muestra unos segundos; si no cabe en el ancho disponible, hace una pausa, se
-        desplaza hasta el final, hace otra pausa y pasa a la siguiente.
-
-        @return Tupla con (índice de la nota, desplazamiento en píxeles) para cada fila.
-        """
-        states = []
-        for row, (_, _, notes) in enumerate(self._agenda):
-            if not notes:
-                states.append((0, 0))
-                continue
-            window = AGENDA_TEXT_WIDTH[row]
-            overflow = [max(0, text_width(_ascii(note.text), 1) - window) for note in notes]
-            durations = [AGENDA_DWELL if extra == 0 else 2 * AGENDA_PAUSE + extra / AGENDA_SPEED for extra in overflow]
-            local = self._t % sum(durations)
-            index = 0
-            while local >= durations[index]:
-                local -= durations[index]
-                index += 1
-            extra = overflow[index]
-            if extra == 0 or local < AGENDA_PAUSE:
-                offset = 0.0
-            else:
-                offset = min(float(extra), (local - AGENDA_PAUSE) * AGENDA_SPEED)
-            states.append((index, int(offset)))
-        return tuple(states)
-
-    def _render_agenda(self, states: tuple) -> Image.Image:
-        """
-        @brief Estilo "3 días": tres filas (hoy, mañana y pasado) con el día, la hora y el texto de la nota.
-
-        Cada fila lleva en una línea el día (y a su derecha la hora de la nota), y debajo el texto de la
-        nota. Si el día tiene varias notas se van turnando y unas rayitas indican cuántas hay (la activa, resaltada). Las notas
-        de hoy cuya hora ya ha pasado se ven apagadas.
-
-        @param states Posición (nota, desplazamiento) de cada fila, calculada por _agenda_states().
-        @return Fotograma RGB de 64x64.
-        """
-        accent = self._accent()
-        image = Image.new("RGB", (REF_SIZE, REF_SIZE), (0, 0, 0))
-        draw = ImageDraw.Draw(image)
-
-        for divider in (24, 39):
-            draw.line((AGENDA_X + 6, divider, AGENDA_X + 34, divider), fill=(32, 32, 32))
-
-        for row, ((label, day, notes), (index, offset)) in enumerate(zip(self._agenda, states)):
-            y = AGENDA_ROWS[row]
-            draw_text(draw, AGENDA_X, y, label, 1, accent if row == 0 else (170, 170, 170))
-            if not notes:
-                draw_text(draw, AGENDA_X, y + 6, "SIN NOTAS", 1, (70, 70, 70))
-                continue
-
-            note = notes[index]
-            past = day == self._today and bool(note.time) and note.time < self._minute
-            text_color = dim(NOTE_COLOR, 0.4) if past else NOTE_COLOR
-
-            title_end = AGENDA_X + AGENDA_TITLE_WIDTH[row]
-            time_x = title_end
+        page, pages, offsets = state
+        visible = notes[page * len(rows):(page + 1) * len(rows)]
+        for note, row, offset in zip(visible, rows, offsets):
+            y, x0, _ = row
+            past = self._is_past(note, day)
+            note_color = COLORS.get(note.color, COLORS["green"])[1]
+            text_color = NOTE_COLOR
             if note.time:
-                time_x = title_end - text_width(note.time, 1)
-                draw_text(draw, time_x, y, note.time, 1, dim(accent, 0.45) if past else accent)
+                draw_text(draw, x0, y, note.time, 1, dim(note_color, 0.4) if past else note_color)
+            else:
+                text_color = note_color  # sin hora, el color de la nota va en el texto
+            text_x, window = self._day_text_box(note, row)
+            strip = Image.new("RGB", (window, font.height), (0, 0, 0))
+            font.draw(ImageDraw.Draw(strip), -offset, 0, _ascii(note.text), dim(text_color, 0.4) if past else text_color)
+            image.paste(strip, (text_x, y))
 
-            dots = min(len(notes), AGENDA_MAX_DOTS)
-            if dots > 1:
-                dots_width = dots * 2 - 1
-                dots_x = AGENDA_X + text_width(label, 1) + 3
-                if dots_x + dots_width + 2 <= time_x:
-                    for dot in range(dots):
-                        draw.line((dots_x + dot * 2, y + 1, dots_x + dot * 2, y + 3), fill=accent if dot == index else (70, 70, 70))
-
-            window = AGENDA_TEXT_WIDTH[row]
-            text = _ascii(note.text)
-            strip = Image.new("RGB", (window, 5), (0, 0, 0))
-            draw_text(ImageDraw.Draw(strip), -offset, 0, text, 1, text_color)
-            image.paste(strip, (AGENDA_X, y + 6))
+        if pages > 1:
+            dots_x = (REF_SIZE - (pages * 3 - 1)) // 2
+            for index in range(pages):
+                draw.rectangle((dots_x + index * 3, 59, dots_x + index * 3 + 1, 59), fill=accent if index == page else (60, 60, 60))
         return image

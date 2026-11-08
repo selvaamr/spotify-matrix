@@ -1,3 +1,17 @@
 {
-  "notes": []
+  "notes": [
+    {
+      "id": "a06192d8",
+      "text": "Dentista",
+      "date": "2026-11-05",
+      "time": "02:17",
+      "repeat": "none",
+      "color": "violet"
+    }
+  ],
+  "legend": {
+    "green": "Salud",
+    "red": "AJT"
+  },
+  "view_day": "2026-11-25"
 }
