@@ -84,7 +84,8 @@ class MatrixDisplay:
         @brief Muestra una imagen en la matriz, sincronizada con el refresco (VSync).
 
         Si es exactamente el mismo objeto imagen que el fotograma anterior (p. ej. el
-        disco en pausa) no se hace nada: la matriz ya lo está mostrando.
+        disco en pausa) no se hace nada: la matriz ya lo está mostrando. Después de cambiar
+        el brillo sí se vuelve a enviar, porque la librería aplica el brillo al enviar la imagen.
 
         @param image Fotograma a mostrar.
         """
@@ -97,9 +98,16 @@ class MatrixDisplay:
     def set_brightness(self, value: int) -> None:
         """
         @brief Cambia el brillo de la matriz en caliente.
+
+        La librería solo aplica el brillo nuevo al recibir una imagen, así que se olvida la última
+        enviada: en el siguiente fotograma se vuelve a mandar aunque sea igual. Sin esto, en las
+        escenas que casi no cambian (calendario, reloj grande, imagen fija...) el brillo no se notaba
+        hasta que cambiaba algo en pantalla.
+
         @param value Brillo de 0 a 100.
         """
         self.matrix.brightness = max(0, min(100, int(value)))
+        self._last_image = None
 
     def clear(self) -> None:
         """@brief Apaga todos los LEDs."""

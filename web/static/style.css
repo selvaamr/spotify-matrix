@@ -217,6 +217,67 @@ input.range-speed::-moz-range-thumb { background-image: url("icons/neumatico.svg
 input.range-brightness::-webkit-slider-thumb { background-image: url("icons/destello.svg"); filter: drop-shadow(0 0 4px rgba(255, 216, 74, .8)); }
 input.range-brightness::-moz-range-thumb { background-image: url("icons/destello.svg"); }
 
+/* Modo noche: una tecla grande con la luna; encendida se pone roja. */
+.night-toggle { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.night-icon { width: 22px; height: 22px; image-rendering: pixelated; color: #b9b9c6; }
+.night-toggle[aria-pressed="true"] {
+  --edge: #5a0f0b;
+  background: linear-gradient(180deg, #e0392c, #a8231a); border-color: #ff5a4d; color: #fff1ef;
+  box-shadow: 0 2px 0 var(--edge), 0 0 14px rgba(255, 60, 45, .45), inset 0 1px 0 rgba(255, 255, 255, .2);
+}
+.night-toggle[aria-pressed="true"] .night-icon { color: #fff1ef; }
+.night-level-row { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 12px; margin-top: 14px; }
+.night-level-label { color: var(--muted); font-size: .9rem; }
+.night-level-row .control { margin: 0; }
+input.range-night { -webkit-appearance: none; appearance: none; background: transparent; margin: 0; cursor: pointer; --p: 0; --fill: calc(11px + var(--p) * (100% - 22px)); }
+input.range-night::-webkit-slider-runnable-track {
+  height: 8px; border-radius: 999px;
+  background: linear-gradient(90deg, transparent var(--fill), #2c2c37 var(--fill)), linear-gradient(90deg, #3a0d0a, #ff3b30);
+}
+input.range-night::-moz-range-track {
+  height: 8px; border-radius: 999px;
+  background: linear-gradient(90deg, transparent var(--fill), #2c2c37 var(--fill)), linear-gradient(90deg, #3a0d0a, #ff3b30);
+}
+input.range-night::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 22px; height: 22px; margin-top: -7px; border-radius: 50%; border: 2px solid #ffb3ab;
+  background: radial-gradient(circle, #ff6a5c 0 35%, #c4261b 70%); box-shadow: 0 0 8px rgba(255, 60, 45, .7);
+}
+input.range-night::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%; border: 2px solid #ffb3ab;
+  background: radial-gradient(circle, #ff6a5c 0 35%, #c4261b 70%); box-shadow: 0 0 8px rgba(255, 60, 45, .7);
+}
+.night-schedule { display: grid; gap: 10px; margin-top: 16px; color: var(--muted); font-size: .9rem; }
+.night-auto { display: flex; align-items: center; gap: 10px; color: var(--text); cursor: pointer; }
+.night-hours { display: grid; grid-template-columns: auto 1fr auto 1fr; align-items: center; gap: 8px; }
+.night-auto input { width: 20px; height: 20px; accent-color: #e0392c; }
+.night-schedule input[type="time"] {
+  font: inherit; color: var(--text); background: #14141a; border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 10px; color-scheme: dark; width: 100%; min-width: 0;
+}
+.night-schedule input[type="time"]:disabled { opacity: .4; }
+
+/* Botón OFF: tecla redonda roja al final de la página. Se pulsa dos veces para apagar. */
+.power { display: grid; justify-items: center; gap: 10px; padding: 18px 0 8px; }
+.power-btn {
+  --edge: #5a0f0b;
+  width: 84px; height: 84px; border-radius: 50%; cursor: pointer;
+  font-family: "Pixelfy", monospace; font-size: 1.5rem; letter-spacing: .06em; color: #fff1ef;
+  border: 2px solid #ff6a5c; background: radial-gradient(circle at 50% 35%, #ff5a4d, #b3241a 70%);
+  box-shadow: 0 6px 0 var(--edge), 0 8px 14px rgba(0, 0, 0, .5), inset 0 2px 0 rgba(255, 255, 255, .25);
+  transition: transform .08s, box-shadow .08s;
+}
+.power-btn:active { transform: translateY(5px); box-shadow: 0 1px 0 var(--edge), 0 2px 4px rgba(0, 0, 0, .5), inset 0 2px 0 rgba(255, 255, 255, .2); }
+.power-btn.armed { animation: power-pulse .8s ease-in-out infinite; }
+@keyframes power-pulse {
+  50% { box-shadow: 0 6px 0 var(--edge), 0 0 0 8px rgba(255, 60, 45, .25), 0 0 22px rgba(255, 60, 45, .8), inset 0 2px 0 rgba(255, 255, 255, .25); }
+}
+.power-hint { margin: 0; min-height: 1.2em; color: #ff8a80; font-size: .9rem; }
+.power-overlay { position: fixed; inset: 0; background: rgba(8, 8, 10, .97); display: grid; place-items: center; padding: 24px; z-index: 10; }
+.power-overlay[hidden] { display: none !important; }
+.power-overlay-box { max-width: 340px; text-align: center; }
+.power-overlay-title { font-family: "Pixelfy", monospace; font-size: 1.8rem; color: #ff5a4d; margin-bottom: 12px; }
+.power-overlay-small { color: var(--muted); font-size: .85rem; }
+
 /* Selector de color: círculos del color correspondiente, sin texto. */
 .swatches { display: flex; flex-wrap: wrap; gap: 12px; padding: 4px; }
 

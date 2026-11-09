@@ -8,6 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&display=swap">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&display=swap">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -33,6 +36,27 @@
       <div id="brightness"></div>
     </section>
 
+    <section class="card" id="night-card">
+      <h2>Modo noche</h2>
+      <button type="button" class="chip night-toggle" id="night-toggle" aria-pressed="false">
+        <svg class="night-icon" viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true"><path fill="currentColor" d="M5 0h1v1h-1zM3 1h1v1h-1zM4 1h1v1h-1zM2 2h1v1h-1zM3 2h1v1h-1zM1 3h1v1h-1zM2 3h1v1h-1zM3 3h1v1h-1zM1 4h1v1h-1zM2 4h1v1h-1zM3 4h1v1h-1zM0 5h1v1h-1zM1 5h1v1h-1zM2 5h1v1h-1zM3 5h1v1h-1zM0 6h1v1h-1zM1 6h1v1h-1zM2 6h1v1h-1zM3 6h1v1h-1zM4 6h1v1h-1zM1 7h1v1h-1zM2 7h1v1h-1zM3 7h1v1h-1zM4 7h1v1h-1zM1 8h1v1h-1zM2 8h1v1h-1zM3 8h1v1h-1zM4 8h1v1h-1zM5 8h1v1h-1zM6 8h1v1h-1zM10 8h1v1h-1zM2 9h1v1h-1zM3 9h1v1h-1zM4 9h1v1h-1zM5 9h1v1h-1zM6 9h1v1h-1zM7 9h1v1h-1zM8 9h1v1h-1zM9 9h1v1h-1zM3 10h1v1h-1zM4 10h1v1h-1zM5 10h1v1h-1zM6 10h1v1h-1zM7 10h1v1h-1zM8 10h1v1h-1zM5 11h1v1h-1zM6 11h1v1h-1z"/></svg>
+        <span id="night-label">Activar</span>
+      </button>
+      <div class="night-level-row">
+        <span class="night-level-label">Intensidad</span>
+        <div id="night-level"></div>
+      </div>
+      <div class="night-schedule">
+        <label class="night-auto"><input type="checkbox" id="night-auto"> Automático</label>
+        <div class="night-hours">
+          <span>de</span>
+          <input type="time" id="night-start" aria-label="Hora de inicio del modo noche">
+          <span>a</span>
+          <input type="time" id="night-end" aria-label="Hora de fin del modo noche">
+        </div>
+      </div>
+    </section>
+
     <section class="card" id="notes-card" hidden>
       <h2>Notas</h2>
       <a class="chip" href="/notas" style="display:inline-flex;align-items:center;text-decoration:none">Gestionar notas del calendario</a>
@@ -42,7 +66,20 @@
       <h2>Imágenes</h2>
       <a class="chip" href="/imagenes" style="display:inline-flex;align-items:center;text-decoration:none">Gestionar imágenes de pixel art</a>
     </section>
+
+    <section class="power">
+      <button type="button" class="power-btn" id="power-btn" aria-label="Apagar la Raspberry Pi">OFF</button>
+      <p class="power-hint" id="power-hint" aria-live="polite"></p>
+    </section>
   </main>
+
+  <div class="power-overlay" id="power-overlay" hidden>
+    <div class="power-overlay-box">
+      <div class="power-overlay-title">Apagando</div>
+      <p>Cuando la luz verde de la Raspberry Pi deje de parpadear (unos 20 segundos), ya puedes desenchufarla.</p>
+      <p class="power-overlay-small">Para volver a encenderla, desenchúfala y vuelve a enchufarla.</p>
+    </div>
+  </div>
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="/static/app.js"></script>

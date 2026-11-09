@@ -633,6 +633,127 @@ async function loadState(background) {
   }
 }
 
+/** @brief Último estado del modo noche recibido ({active, auto, start, end}), o null. */
+let night = null;
+
+/** @brief Dibuja la tarjeta del modo noche con el último estado recibido. */
+function renderNight() {
+  if (!night || !$("night-toggle")) return;
+  $("night-toggle").setAttribute("aria-pressed", String(night.active));
+  $("night-label").textContent = night.active ? "Activado" : "Activar";
+  $("night-auto").checked = night.auto;
+  // No se tocan las horas mientras se están editando.
+  if (document.activeElement !== $("night-start")) $("night-start").value = night.start;
+  if (document.activeElement !== $("night-end")) $("night-end").value = night.end;
+  $("night-start").disabled = $("night-end").disabled = !night.auto;
+  renderNightLevel();
+}
+
+/** @brief Dibuja la barra de intensidad del rojo (solo la primera vez, o si no se está tocando). */
+function renderNightLevel() {
+  const box = $("night-level");
+  if (!box || (box.firstChild && box.contains(document.activeElement))) return;
+  const current = box.querySelector("input");
+  if (current && Number(current.value) === night.level) return;
+  const slider = buildSlider({
+    label: "",
+    variant: "night",
+    showValue: false,
+    min: night.min_level || 5,
+    max: 100,
+    step: 1,
+    value: night.level,
+    onChange: async (value) => {
+      try {
+        const result = await api("/api/night/level", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ level: value }),
+        });
+        night.level = result.level;
+      } catch (error) {
+        toast(`No se pudo cambiar la intensidad: ${error.message}`);
+      }
+    },
+  });
+  slider.querySelector("input").setAttribute("aria-label", "Intensidad del rojo en modo noche");
+  box.replaceChildren(slider);
+}
+
+/**
+ * @brief Descarga el estado del modo noche (también cambia solo a las horas programadas).
+ * @return {Promise<void>}
+ */
+async function loadNight() {
+  try {
+    night = await api("/api/night");
+    renderNight();
+  } catch (ignored) { /* sin modo noche en el servidor o sin conexión */ }
+}
+
+/** @brief Guarda el horario del modo noche con lo que hay en la tarjeta. */
+async function saveNightSchedule() {
+  try {
+    night = await api("/api/night/schedule", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auto: $("night-auto").checked, start: $("night-start").value, end: $("night-end").value }),
+    });
+    renderNight();
+  } catch (error) {
+    toast(`No se pudo guardar el horario: ${error.message}`);
+    loadNight();
+  }
+}
+
+/** @brief Prepara los botones de la tarjeta del modo noche. */
+function setupNight() {
+  if (!$("night-toggle")) return;
+  $("night-toggle").addEventListener("click", async () => {
+    try {
+      night = await post("/api/night", { active: !(night && night.active) });
+      renderNight();
+    } catch (error) {
+      toast(`No se pudo cambiar el modo noche: ${error.message}`);
+    }
+  });
+  ["night-auto", "night-start", "night-end"].forEach((id) => $(id).addEventListener("change", saveNightSchedule));
+  loadNight();
+}
+
+/** @brief Milisegundos que espera el botón OFF la segunda pulsación antes de cancelar. */
+const POWER_CONFIRM_MS = 4000;
+
+/**
+ * @brief Prepara el botón OFF: la primera pulsación pide confirmación y la segunda apaga la Raspberry Pi.
+ */
+function setupPower() {
+  const button = $("power-btn");
+  if (!button) return;
+  let timer = null;
+  const disarm = () => {
+    clearTimeout(timer);
+    timer = null;
+    button.classList.remove("armed");
+    $("power-hint").textContent = "";
+  };
+  button.addEventListener("click", async () => {
+    if (!timer) {
+      button.classList.add("armed");
+      $("power-hint").textContent = "Pulsa otra vez para apagar";
+      timer = setTimeout(disarm, POWER_CONFIRM_MS);
+      return;
+    }
+    disarm();
+    try {
+      await post("/api/power/off", { confirm: true });
+      $("power-overlay").hidden = false;
+    } catch (error) {
+      toast(`No se pudo apagar: ${error.message}`);
+    }
+  });
+}
+
 /** @brief true mientras hay una petición de vista previa en curso (evita acumularlas). */
 let previewBusy = false;
 
@@ -667,11 +788,13 @@ function start() {
   });
 
   loadState(false);
+  setupNight();
+  setupPower();
   refreshPreview();
   setInterval(refreshPreview, PREVIEW_INTERVAL_MS);
-  setInterval(() => loadState(true), STATE_INTERVAL_MS);
+  setInterval(() => { loadState(true); loadNight(); }, STATE_INTERVAL_MS);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) loadState(true);
+    if (!document.hidden) { loadState(true); loadNight(); }
   });
 }
 

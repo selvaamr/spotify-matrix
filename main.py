@@ -8,7 +8,9 @@ Los ajustes (escena, velocidad, diseño, brillo...) se cambian desde la web y se
 guardan en settings.json, por lo que el comando de arranque no necesita parámetros.
 El tiempo se descarga de Open-Meteo en segundo plano (ver services/weather.py).
 Cuando Spotify empieza a sonar se cambia solo al modo Spotify, y al parar se vuelve al modo
-anterior (ver core/autoswitch.py).
+anterior (ver core/autoswitch.py). El modo noche (brillo mínimo y todo en rojo) se activa solo a la
+hora programada o desde la web (ver core/nightmode.py). El botón OFF de la web apaga la Raspberry Pi
+de forma segura (ver web/power_api.py).
 
 @par Uso
 @code
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -33,6 +36,7 @@ from core.autoswitch import SpotifyAutoSwitch
 from core.controller import Controller
 from core.display import MATRIX_SIZE, MatrixDisplay, MockDisplay
 from core.manager import SceneManager
+from core.nightmode import NightMode
 from core.notes import NotesStore
 from core.pixelart import PixelArtStore
 from core.preview import FramePublisher
@@ -47,6 +51,12 @@ from services.weather import poller_from_env
 
 ## Archivo donde se guardan los ajustes del usuario (junto a main.py, esté donde esté el directorio de trabajo).
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
+
+## Escena que se pone al entrar el modo noche.
+NIGHT_SCENE = "clock"
+
+## Archivo donde se guarda el horario del modo noche (junto a main.py).
+NIGHT_FILE = Path(__file__).resolve().parent / "night.json"
 
 ## Archivo donde se guardan las notas del calendario (junto a main.py).
 NOTES_FILE = Path(__file__).resolve().parent / "notes.json"
@@ -143,7 +153,45 @@ def build_spotify_client(args: argparse.Namespace) -> SpotifyClient:
     )
 
 
-def start_web(controller: Controller, publisher: FramePublisher, notes: NotesStore, gallery: PixelArtStore):
+class NightSceneSwitch:
+    """
+    @brief Al entrar el modo noche pone el reloj (en su versión de noche) y al salir vuelve al modo anterior.
+
+    Si durante la noche se elige otro modo a mano, se respeta: al salir no se cambia nada.
+    """
+
+    def __init__(self, controller: Controller, clock: ClockScene) -> None:
+        """
+        @brief Prepara el cambio.
+        @param controller Controlador con el que se cambia de modo.
+        @param clock      Escena del reloj (para ponerla en su versión de noche).
+        """
+        ## Controlador de la matriz.
+        self.controller = controller
+        ## Escena del reloj.
+        self.clock = clock
+        ## Modo al que volver al salir del modo noche, o None.
+        self.return_to: str | None = None
+
+    def __call__(self, active: bool) -> None:
+        """
+        @brief Se llama al entrar (True) o salir (False) del modo noche.
+        @param active Si el modo noche acaba de entrar.
+        """
+        self.clock.night_mode = active
+        current = self.controller.manager.current_name
+        if active:
+            if current != NIGHT_SCENE:
+                self.return_to = current
+                self.controller.set_scene(NIGHT_SCENE)
+        else:
+            if self.return_to and current == NIGHT_SCENE:
+                self.controller.set_scene(self.return_to)
+            self.return_to = None
+
+
+def start_web(controller: Controller, publisher: FramePublisher, notes: NotesStore, gallery: PixelArtStore,
+              night: NightMode, power_off: threading.Event):
     """
     @brief Arranca la interfaz web en segundo plano si las dependencias están instaladas.
 
@@ -153,16 +201,22 @@ def start_web(controller: Controller, publisher: FramePublisher, notes: NotesSto
     @param publisher  Origen del fotograma para la vista previa.
     @param notes      Almacén de notas del calendario (se gestionan en la página /notas).
     @param gallery    Galería de pixel art (se gestiona en la página /imagenes).
+    @param night      Modo noche (se enciende, apaga y programa desde la página principal).
+    @param power_off  Evento que se activa cuando se pulsa el botón OFF de la web.
     @return El servidor web en marcha, o None si no se ha podido arrancar.
     """
     try:
+        from web.night_api import create_night_router
         from web.notes_api import create_notes_router
+        from web.power_api import create_power_router
         from web.pixelart_api import create_pixelart_router
         from web.server import WebServer, create_app, local_urls
 
         app = create_app(controller, publisher)
         app.include_router(create_notes_router(notes))
         app.include_router(create_pixelart_router(gallery))
+        app.include_router(create_night_router(night))
+        app.include_router(create_power_router(power_off.set))
         server = WebServer(app)
     except ImportError as exc:
         print(f"Web desactivada, faltan dependencias ({exc}). Instala con: pip install fastapi uvicorn", flush=True)
@@ -194,8 +248,9 @@ def run(args: argparse.Namespace) -> None:
     gallery = PixelArtStore(PIXELART_DIR)
     gallery.install_defaults(PIXELART_DEFAULTS_DIR)
 
+    clock = ClockScene()
     if args.no_spotify:
-        manager.register(ClockScene())
+        manager.register(clock)
         manager.register(CalendarScene(notes=notes))
         manager.register(WeatherScene(weather))
         manager.register(PixelArtScene(gallery))
@@ -209,7 +264,7 @@ def run(args: argparse.Namespace) -> None:
         poller = SpotifyPoller(spotify, args.poll_seconds)
         poller.start()
         manager.register(SpotifyRecordScene(poller))
-        manager.register(ClockScene())
+        manager.register(clock)
         manager.register(CalendarScene(notes=notes))
         manager.register(WeatherScene(weather))
         manager.register(PixelArtScene(gallery))
@@ -219,10 +274,15 @@ def run(args: argparse.Namespace) -> None:
         weather.start()
 
     display = MockDisplay(args.mock_output) if args.mock_output else MatrixDisplay()
-    controller = Controller(manager, SettingsStore(SETTINGS_FILE), display, default_scene)
+    # El modo noche se pone entre el controlador y la pantalla: guarda el brillo de día y aplica el de noche.
+    night = NightMode(display, NIGHT_FILE)
+    controller = Controller(manager, SettingsStore(SETTINGS_FILE), night, default_scene)
     controller.restore()
+    night.on_change.append(NightSceneSwitch(controller, clock))
     publisher = FramePublisher()
-    web = None if (args.no_web or args.once) else start_web(controller, publisher, notes, gallery)
+    ## Se activa al pulsar OFF en la web: el bucle termina, se recoge todo y se apaga la Raspberry Pi.
+    power_off = threading.Event()
+    web = None if (args.no_web or args.once) else start_web(controller, publisher, notes, gallery, night, power_off)
     auto_switch = SpotifyAutoSwitch(controller, lambda: poller.snapshot()[1]) if poller and not args.once else None
 
     size = MATRIX_SIZE
@@ -236,12 +296,13 @@ def run(args: argparse.Namespace) -> None:
 
             if auto_switch:
                 auto_switch.tick()
+            night.tick()
             manager.update(delta)
-            frame = manager.render(size)
+            frame = night.filter(manager.render(size))
             publisher.publish(frame)
-            display.show(frame)
+            night.show(frame)
 
-            if args.once:
+            if args.once or power_off.is_set():
                 break
 
             time.sleep(max(0.0, (1.0 / args.fps) - (time.monotonic() - frame_start)))
@@ -254,7 +315,11 @@ def run(args: argparse.Namespace) -> None:
         if poller:
             poller.stop()
         weather.stop()
-        display.clear()
+        night.clear()
+
+    if power_off.is_set():
+        from web.power_api import power_off_system
+        power_off_system()
 
 
 if __name__ == "__main__":

@@ -14,6 +14,9 @@ instalada en el sistema.
 Siempre se muestra la fecha. No hay segundos: la imagen solo cambia una vez por minuto
 (y los dos puntos del reloj digital parpadean), así que la CPU apenas trabaja.
 
+En modo noche (ver night_mode) se encienden los menos LEDs posibles: solo la hora, sin fecha, con
+segmentos finos de 1 píxel y sin los segmentos apagados de fondo; los dos puntos no parpadean.
+
 La hora es la del sistema: si en la Raspberry Pi no es la correcta, se arregla con
 `sudo timedatectl set-timezone Europe/Madrid`.
 """
@@ -90,6 +93,9 @@ _BITMAP_CELLS = {
 ## Tamaño final (ancho, alto) al que se amplían algunos dígitos, cuando ningún tamaño de punto entero
 ## encaja bien. Pixel 2 en el estilo grande se amplía a 12x15, como las tipografías Bloque y Redondeada.
 _BITMAP_FIT = {("pixel2", "stacked"): (12, 15)}
+
+## Tipografía que se usa en modo noche: segmentos de 1 píxel de grosor (la que menos LEDs enciende).
+NIGHT_FONT = "segments_thin"
 
 ## Segmentos encendidos de cada dígito en la tipografía "Segmentos" (a=arriba, b=arriba dcha., c=abajo dcha.,
 ## d=abajo, e=abajo izda., f=arriba izda., g=centro).
@@ -186,8 +192,8 @@ def _digit_mask(font: str, char: str, sx: int, sy: int) -> Image.Image | None:
     """
     if char == " ":
         return None
-    if font == "segments":
-        return _segments_mask(_SEGMENTS[char], 3 * sx, 5 * sy)
+    if font in ("segments", NIGHT_FONT):
+        return _segments_mask(_SEGMENTS[char], 3 * sx, 5 * sy, 1 if font == NIGHT_FONT else 2)
     mask = _block_mask(char, sx, sy)
     return _chamfer(mask, 1) if font == "round" else mask
 
@@ -271,7 +277,7 @@ def _draw_colon(image: Image.Image, font: str, x: int, y: int, height: int, colo
     @param height Alto de los dígitos en píxeles.
     @param color  Color RGB.
     """
-    size = 4 if font in ("block", "round") else 2
+    size = 4 if font in ("block", "round") else 1 if font == NIGHT_FONT else 2
     dot = Image.new("L", (size, size), 255)
     if font == "round":
         _chamfer(dot, 1)
@@ -340,6 +346,8 @@ class ClockScene(Scene):
         self._cache_key: tuple | None = None
         ## Último fotograma dibujado.
         self._cache_image: Image.Image | None = None
+        ## Modo noche (lo activa core/nightmode.py): solo la hora, segmentos finos y dos puntos fijos.
+        self.night_mode = False
 
     def on_enter(self) -> None:
         """@brief Al activarse la escena, lee la hora actual."""
@@ -385,20 +393,25 @@ class ClockScene(Scene):
         s, now = self.settings, self._now
         colon = self._colon_visible() if s["style"] == "digital" else None
         return (
-            s["style"], size, s["color"], s["font"], s["hour_format"],
+            s["style"], size, s["color"], s["font"], s["hour_format"], self.night_mode,
             now.hour, now.minute, (now.weekday(), now.day, now.month), colon,
         )
 
     def _colon_visible(self) -> bool:
-        """@brief Los dos puntos del reloj digital se ven durante la primera mitad de cada segundo."""
-        return self._now.microsecond < 500_000
+        """
+        @brief Los dos puntos del reloj digital se ven durante la primera mitad de cada segundo,
+               o siempre en modo noche (para que no moleste el parpadeo).
+        """
+        return self.night_mode or self._now.microsecond < 500_000
 
     def _color(self) -> Color:
         """@brief Color RGB elegido por el usuario."""
         return COLORS[self.settings["color"]][1]
 
     def _font(self) -> str:
-        """@brief Tipografía elegida (con "block" si el ajuste no fuese válido)."""
+        """@brief Tipografía elegida (con "block" si el ajuste no fuese válido); en modo noche, NIGHT_FONT."""
+        if self.night_mode:
+            return NIGHT_FONT
         font = self.settings["font"]
         return font if font in FONTS else "block"
 
@@ -435,6 +448,8 @@ class ClockScene(Scene):
         sx, sy = 3, 4
         height, gap, line_height = 5 * sy, 6, 5
         y = (REF_SIZE - (height + gap + line_height)) // 2
+        if self.night_mode:
+            y = (REF_SIZE - height) // 2  # sin fecha: la hora sola, centrada
 
         image = Image.new("RGB", (REF_SIZE, REF_SIZE), (0, 0, 0))
         x0 = 7
@@ -450,6 +465,8 @@ class ClockScene(Scene):
         if self._colon_visible():
             _draw_colon(image, font, x0 + 23, y, height, color)
 
+        if self.night_mode:
+            return image
         draw = ImageDraw.Draw(image)
         line = self._date_line(ampm)
         draw_text(draw, (REF_SIZE - text_width(line, 1)) // 2, y + height + gap, line, 1, dim(color, 0.7))
@@ -467,6 +484,8 @@ class ClockScene(Scene):
         hours, ampm = self._hour_text()
         sx, sy = 4, 3
         row, y, x0 = 5 * sy, 10, 18
+        if self.night_mode:
+            y = (REF_SIZE - (2 * row + 3)) // 2  # sin fecha: las dos filas centradas
 
         image = Image.new("RGB", (REF_SIZE, REF_SIZE), (0, 0, 0))
         if hours.startswith(" "):
@@ -482,6 +501,8 @@ class ClockScene(Scene):
         draw = ImageDraw.Draw(image)
         if ampm:
             draw_text(draw, x0 + 30, y + row - 2, ampm, 1, dim(color, 0.7))
+        if self.night_mode:
+            return image
         line = self._date_line()
         draw_text(draw, (REF_SIZE - text_width(line, 1)) // 2, y + 2 * row + 3 + 5, line, 1, dim(color, 0.7))
         return image
